@@ -270,6 +270,16 @@ function setupObserver() {
 function loadSettings() {
   return new Promise((resolve) => {
     chrome.storage.sync.get(DEFAULT_SETTINGS, (settings) => {
+      if (chrome.runtime.lastError) {
+        debugLog("Failed to load settings:", chrome.runtime.lastError.message);
+        currentSettings = {
+          volume: DEFAULT_SETTINGS.volume,
+          enabledSites: { ...DEFAULT_SETTINGS.enabledSites }
+        };
+        resolve();
+        return;
+      }
+
       currentSettings = sanitizeSettings(settings);
       resolve();
     });

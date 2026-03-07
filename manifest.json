@@ -1,14 +1,24 @@
-﻿{
+{
   "manifest_version": 3,
   "name": "Volume Normalizer",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "description": "Automatically normalizes video volume on loud websites like X, TikTok, Instagram, YouTube, and more",
-  "permissions": [
-    "storage"
-  ],
+  "permissions": ["storage"],
   "icons": {
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "volumenormalizer@antigravity",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  },
+  "background": {
+    "scripts": ["background.js"],
+    "service_worker": "background.js"
   },
   "content_scripts": [
     {
@@ -42,9 +52,7 @@
         "*://linkedin.com/*",
         "*://*.linkedin.com/*"
       ],
-      "js": [
-        "content.js"
-      ],
+      "js": ["content.js"],
       "run_at": "document_start",
       "all_frames": true
     }
@@ -57,5 +65,3 @@
     }
   }
 }
-
-

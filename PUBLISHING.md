@@ -1,18 +1,20 @@
-﻿# How to Publish the Extension
+# How to Publish the Extension
 
 Brave is Chromium-based, so you can publish this extension to the Chrome Web Store.
 That listing will also serve Chrome, Brave, Edge, and Opera users.
+
+Build the packages first with `npm install` and `npm run build`.
 
 ## Prerequisites
 
 1. Google account
 2. Chrome Web Store developer registration (one-time fee)
-3. Upload package (`.zip`) for the extension
+3. Upload package (`.zip`) for the extension from `dist/`
 
 ## Publish Steps
 
 1. Open the Chrome Web Store Developer Dashboard.
-2. Create a new item and upload the extension zip.
+2. Create a new item and upload `dist/VolumeNormalizer-Chrome.zip`.
 3. Complete listing metadata:
 - Description
 - Category
@@ -26,6 +28,6 @@ That listing will also serve Chrome, Brave, Edge, and Opera users.
 
 ## Updating
 
-1. Increment `version` in the manifest.
-2. Build a new zip package.
+1. Increment `version` in `manifest.json`.
+2. Run `npm run build`.
 3. Upload the new package in the existing listing.

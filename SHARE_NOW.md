@@ -1,11 +1,13 @@
-﻿# Share Instantly (Without Store Review Delay)
+# Share Instantly (Without Store Review Delay)
 
 Store review can take time. For immediate sharing, users can install the extension in developer mode.
 
+Build the extension first with `npm install` and `npm run build`.
+
 ## What to Share
 
-- Chromium browsers: `VolumeNormalizer.zip`
-- Firefox: `VolumeNormalizer-Firefox.zip`
+- Chromium browsers: `dist/VolumeNormalizer-Chrome.zip`
+- Firefox: `dist/VolumeNormalizer-Firefox.zip`
 
 ## Chromium Install (Chrome/Brave/Edge)
 
