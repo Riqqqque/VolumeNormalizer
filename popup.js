@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Volume Normalizer - Popup Script
  * Handles settings UI for volume level and site toggles.
  */
@@ -29,14 +29,43 @@ const DEFAULT_SETTINGS = {
 
 const SAVE_DEBOUNCE_MS = 150;
 
+const heroVolumeValue = document.getElementById("heroVolumeValue");
+const enabledSitesValue = document.getElementById("enabledSitesValue");
 const volumeSlider = document.getElementById("volumeSlider");
 const volumeInput = document.getElementById("volumeInput");
+const volumeTone = document.getElementById("volumeTone");
+const volumeProgressFill = document.getElementById("volumeProgressFill");
+const sitesSectionHint = document.getElementById("sitesSectionHint");
 const sitesList = document.getElementById("sitesList");
 
 let currentSettings = { ...DEFAULT_SETTINGS };
 let pendingSave = {};
 let pendingSaveTimerId = null;
 let saveSequence = Promise.resolve();
+
+function sendRuntimeMessage(message) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(message, (response) => {
+      if (chrome.runtime.lastError) {
+        console.warn(
+          "[Volume Normalizer] Runtime messaging failed:",
+          chrome.runtime.lastError.message
+        );
+        resolve(null);
+        return;
+      }
+
+      resolve(response ?? null);
+    });
+  });
+}
+
+function cloneDefaultSettings() {
+  return {
+    volume: DEFAULT_SETTINGS.volume,
+    enabledSites: { ...DEFAULT_SETTINGS.enabledSites }
+  };
+}
 
 function clampVolume(rawValue) {
   const numberValue = Number(rawValue);
@@ -65,12 +94,20 @@ function sanitizeSettings(rawSettings) {
   };
 }
 
-function loadSettings() {
+async function loadSettings() {
+  const response = await sendRuntimeMessage({ type: "get-settings" });
+  if (response && response.ok && response.settings) {
+    return sanitizeSettings(response.settings);
+  }
+
   return new Promise((resolve) => {
     chrome.storage.sync.get(DEFAULT_SETTINGS, (settings) => {
       if (chrome.runtime.lastError) {
-        console.warn("[Volume Normalizer] Failed to load settings:", chrome.runtime.lastError.message);
-        resolve({ ...DEFAULT_SETTINGS });
+        console.warn(
+          "[Volume Normalizer] Failed to load settings:",
+          chrome.runtime.lastError.message
+        );
+        resolve(cloneDefaultSettings());
         return;
       }
 
@@ -79,15 +116,36 @@ function loadSettings() {
   });
 }
 
-function saveSettingsNow(settingsPatch) {
+function saveSettingsDirectly(settingsPatch) {
   return new Promise((resolve) => {
     chrome.storage.sync.set(settingsPatch, () => {
       if (chrome.runtime.lastError) {
-        console.warn("[Volume Normalizer] Failed to save settings:", chrome.runtime.lastError.message);
+        console.warn(
+          "[Volume Normalizer] Failed to save settings:",
+          chrome.runtime.lastError.message
+        );
       }
       resolve();
     });
   });
+}
+
+async function saveSettingsNow(settingsPatch) {
+  const response = await sendRuntimeMessage({
+    type: "save-settings",
+    settingsPatch
+  });
+
+  if (response && response.ok) {
+    return;
+  }
+
+  if (!response || !response.ok) {
+    const errorMessage =
+      response && response.error ? response.error : "background save unavailable";
+    console.warn("[Volume Normalizer] Failed to save settings:", errorMessage);
+    await saveSettingsDirectly(settingsPatch);
+  }
 }
 
 async function flushPendingSave() {
@@ -119,9 +177,67 @@ function queueSave(settingsPatch, immediate = false) {
   pendingSaveTimerId = window.setTimeout(flushPendingSave, SAVE_DEBOUNCE_MS);
 }
 
+function getEnabledSiteCount(enabledSites) {
+  return SITES.reduce((count, site) => {
+    return count + (enabledSites[site.id] !== false ? 1 : 0);
+  }, 0);
+}
+
+function getVolumeToneLabel(volume) {
+  if (volume === 0) {
+    return "Muted";
+  }
+  if (volume <= 15) {
+    return "Soft";
+  }
+  if (volume <= 35) {
+    return "Balanced";
+  }
+  if (volume <= 60) {
+    return "Lifted";
+  }
+  if (volume <= 85) {
+    return "Strong";
+  }
+  return "Maxed";
+}
+
+function updateEnabledSitesUi(enabledSites) {
+  const enabledCount = getEnabledSiteCount(enabledSites);
+  enabledSitesValue.textContent = `${enabledCount}/${SITES.length}`;
+
+  if (enabledCount === SITES.length) {
+    sitesSectionHint.textContent = "All supported sites are active";
+    return;
+  }
+
+  if (enabledCount === 0) {
+    sitesSectionHint.textContent = "No sites are active";
+    return;
+  }
+
+  sitesSectionHint.textContent = `${enabledCount} site${enabledCount === 1 ? "" : "s"} active`;
+}
+
+function sanitizeVolumeInputText(rawValue) {
+  return String(rawValue ?? "")
+    .replace(/[^\d]/g, "")
+    .slice(0, 3);
+}
+
+function syncVolumeInputWidth(value) {
+  const digitCount = Math.max(1, String(value).length);
+  volumeInput.style.width = `${digitCount}ch`;
+}
+
 function setVolumeUi(value) {
+  const displayValue = String(value);
   volumeSlider.value = String(value);
-  volumeInput.value = String(value);
+  volumeInput.value = displayValue;
+  syncVolumeInputWidth(displayValue);
+  heroVolumeValue.textContent = `${value}%`;
+  volumeTone.textContent = getVolumeToneLabel(value);
+  volumeProgressFill.style.width = `${value}%`;
 }
 
 function updateVolume(value, immediateSave = false) {
@@ -142,6 +258,7 @@ function updateVolume(value, immediateSave = false) {
 function createSiteToggle(site, enabled) {
   const div = document.createElement("div");
   div.className = "site-toggle";
+  div.dataset.enabled = enabled ? "true" : "false";
 
   const siteInfo = document.createElement("div");
   siteInfo.className = "site-info";
@@ -150,12 +267,25 @@ function createSiteToggle(site, enabled) {
   iconSpan.className = "site-icon";
   iconSpan.textContent = site.icon;
 
+  const siteCopy = document.createElement("div");
+  siteCopy.className = "site-copy";
+
   const nameSpan = document.createElement("span");
   nameSpan.className = "site-name";
   nameSpan.textContent = site.name;
 
+  const stateSpan = document.createElement("span");
+  stateSpan.className = "site-state";
+  stateSpan.textContent = enabled ? "On" : "Off";
+
+  siteCopy.appendChild(nameSpan);
+  siteCopy.appendChild(stateSpan);
+
   siteInfo.appendChild(iconSpan);
-  siteInfo.appendChild(nameSpan);
+  siteInfo.appendChild(siteCopy);
+
+  const siteAction = document.createElement("div");
+  siteAction.className = "site-action";
 
   const label = document.createElement("label");
   label.className = "toggle";
@@ -173,7 +303,8 @@ function createSiteToggle(site, enabled) {
   label.appendChild(slider);
 
   div.appendChild(siteInfo);
-  div.appendChild(label);
+  siteAction.appendChild(label);
+  div.appendChild(siteAction);
 
   return div;
 }
@@ -197,6 +328,15 @@ function onSiteToggleChange(event) {
     return;
   }
 
+  const siteToggle = target.closest(".site-toggle");
+  if (siteToggle) {
+    siteToggle.dataset.enabled = target.checked ? "true" : "false";
+    const state = siteToggle.querySelector(".site-state");
+    if (state) {
+      state.textContent = target.checked ? "On" : "Off";
+    }
+  }
+
   currentSettings = {
     ...currentSettings,
     enabledSites: {
@@ -204,6 +344,7 @@ function onSiteToggleChange(event) {
       [target.dataset.siteId]: target.checked
     }
   };
+  updateEnabledSitesUi(currentSettings.enabledSites);
   queueSave({ enabledSites: currentSettings.enabledSites }, true);
 }
 
@@ -211,6 +352,7 @@ async function init() {
   currentSettings = await loadSettings();
 
   setVolumeUi(currentSettings.volume);
+  updateEnabledSitesUi(currentSettings.enabledSites);
   renderSites(currentSettings.enabledSites);
 
   volumeSlider.addEventListener("input", (event) => {
@@ -221,28 +363,39 @@ async function init() {
   });
 
   volumeInput.addEventListener("input", (event) => {
-    if (event.target.value.trim() === "") {
+    const sanitizedValue = sanitizeVolumeInputText(event.target.value);
+    event.target.value = sanitizedValue;
+    syncVolumeInputWidth(sanitizedValue);
+
+    if (sanitizedValue === "") {
       return;
     }
-    updateVolume(event.target.value);
+    updateVolume(sanitizedValue);
   });
 
   volumeInput.addEventListener("blur", (event) => {
     const fallback = currentSettings.volume;
-    const nextValue = event.target.value.trim() === "" ? fallback : event.target.value;
+    const sanitizedValue = sanitizeVolumeInputText(event.target.value);
+    const nextValue = sanitizedValue === "" ? fallback : sanitizedValue;
+    updateVolume(nextValue, true);
+  });
+
+  volumeInput.addEventListener("change", (event) => {
+    const sanitizedValue = sanitizeVolumeInputText(event.target.value);
+    const nextValue = sanitizedValue === "" ? currentSettings.volume : sanitizedValue;
     updateVolume(nextValue, true);
   });
 
   volumeInput.addEventListener("wheel", (event) => {
     event.preventDefault();
     const delta = event.deltaY > 0 ? -1 : 1;
-    updateVolume(currentSettings.volume + delta);
+    updateVolume(currentSettings.volume + delta, true);
   });
 
   volumeSlider.addEventListener("wheel", (event) => {
     event.preventDefault();
     const delta = event.deltaY > 0 ? -1 : 1;
-    updateVolume(currentSettings.volume + delta);
+    updateVolume(currentSettings.volume + delta, true);
   });
 
   volumeInput.addEventListener("keydown", (event) => {
@@ -253,10 +406,6 @@ async function init() {
   });
 
   sitesList.addEventListener("change", onSiteToggleChange);
-
-  window.addEventListener("beforeunload", () => {
-    flushPendingSave();
-  });
 }
 
 init();
