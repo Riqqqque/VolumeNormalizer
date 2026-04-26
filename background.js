@@ -27,6 +27,11 @@ const DEFAULT_SETTINGS = {
   }, {})
 };
 
+const SAVE_DEBOUNCE_MS = 150;
+
+let pendingSave = {};
+let pendingSaveTimerId = null;
+let pendingSaveWaiters = [];
 let saveSequence = Promise.resolve();
 
 function cloneSettings(settings) {
@@ -97,27 +102,71 @@ function loadSettings() {
 }
 
 function saveSettings(settingsPatch) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     chrome.storage.sync.set(settingsPatch, () => {
       if (chrome.runtime.lastError) {
-        console.warn(
-          "[Volume Normalizer] Failed to save settings:",
-          chrome.runtime.lastError.message
-        );
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
       }
+
       resolve();
     });
   });
 }
 
-function queueSave(settingsPatch) {
+async function flushPendingSave() {
+  if (pendingSaveTimerId !== null) {
+    clearTimeout(pendingSaveTimerId);
+    pendingSaveTimerId = null;
+  }
+
+  if (Object.keys(pendingSave).length === 0) {
+    return;
+  }
+
+  const settingsPatch = pendingSave;
+  const waiters = pendingSaveWaiters;
+  pendingSave = {};
+  pendingSaveWaiters = [];
+
+  const savePromise = saveSequence.catch(() => {}).then(() => saveSettings(settingsPatch));
+  saveSequence = savePromise.catch(() => {});
+
+  try {
+    await savePromise;
+    waiters.forEach((waiter) => waiter.resolve());
+  } catch (error) {
+    console.warn(
+      "[Volume Normalizer] Failed to save settings:",
+      error instanceof Error ? error.message : String(error)
+    );
+    waiters.forEach((waiter) => waiter.reject(error));
+  }
+}
+
+function queueSave(settingsPatch, debounce = true) {
   const sanitizedPatch = sanitizeSettingsPatch(settingsPatch);
   if (Object.keys(sanitizedPatch).length === 0) {
     return saveSequence;
   }
 
-  saveSequence = saveSequence.then(() => saveSettings(sanitizedPatch));
-  return saveSequence;
+  pendingSave = { ...pendingSave, ...sanitizedPatch };
+
+  const queuedSave = new Promise((resolve, reject) => {
+    pendingSaveWaiters.push({ resolve, reject });
+  });
+
+  if (!debounce) {
+    flushPendingSave();
+    return queuedSave;
+  }
+
+  if (pendingSaveTimerId !== null) {
+    clearTimeout(pendingSaveTimerId);
+  }
+  pendingSaveTimerId = setTimeout(flushPendingSave, SAVE_DEBOUNCE_MS);
+
+  return queuedSave;
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -143,7 +192,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "save-settings") {
-    queueSave(message.settingsPatch)
+    queueSave(message.settingsPatch, message.debounce !== false)
       .then(() => {
         sendResponse({ ok: true });
       })

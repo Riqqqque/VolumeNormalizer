@@ -43,6 +43,7 @@ const attachedMedia = new WeakSet();
 const internalVolumeSet = new WeakMap();
 let pendingNodes = new Set();
 let flushTimerId = null;
+let idleScanTimerId = null;
 
 function debugLog(...args) {
   if (DEBUG) {
@@ -167,14 +168,18 @@ function attachMediaListeners(element) {
 /**
  * Normalize volume on one media element.
  */
-function normalizeMediaElement(element) {
+function normalizeMediaElement(
+  element,
+  targetVolume = getTargetVolume(),
+  volumeAttribute = String(currentSettings.volume)
+) {
   if (!(element instanceof HTMLMediaElement) || !isSiteEnabled()) {
     return;
   }
 
   attachMediaListeners(element);
-  setVolumeSafely(element, getTargetVolume());
-  element.setAttribute(PROCESSED_ATTR, String(currentSettings.volume));
+  setVolumeSafely(element, targetVolume);
+  element.setAttribute(PROCESSED_ATTR, volumeAttribute);
 }
 
 function normalizeMediaNode(node) {
@@ -182,13 +187,23 @@ function normalizeMediaNode(node) {
     return;
   }
 
+  const targetVolume = getTargetVolume();
+  const volumeAttribute = String(currentSettings.volume);
+
   if (node.matches(MEDIA_SELECTOR)) {
-    normalizeMediaElement(node);
+    normalizeMediaElement(node, targetVolume, volumeAttribute);
   }
 
   node.querySelectorAll(MEDIA_SELECTOR).forEach((mediaElement) => {
-    normalizeMediaElement(mediaElement);
+    normalizeMediaElement(mediaElement, targetVolume, volumeAttribute);
   });
+}
+
+function nodeContainsMedia(node) {
+  return (
+    node instanceof Element &&
+    (node.matches(MEDIA_SELECTOR) || node.querySelector(MEDIA_SELECTOR) !== null)
+  );
 }
 
 /**
@@ -199,13 +214,16 @@ function normalizeAllMedia() {
     return;
   }
 
+  const targetVolume = getTargetVolume();
+  const volumeAttribute = String(currentSettings.volume);
+
   document.querySelectorAll(MEDIA_SELECTOR).forEach((mediaElement) => {
     const lastVolume = mediaElement.getAttribute(PROCESSED_ATTR);
     if (
-      lastVolume !== String(currentSettings.volume) ||
-      shouldUpdateVolume(mediaElement, getTargetVolume())
+      lastVolume !== volumeAttribute ||
+      shouldUpdateVolume(mediaElement, targetVolume)
     ) {
-      normalizeMediaElement(mediaElement);
+      normalizeMediaElement(mediaElement, targetVolume, volumeAttribute);
     } else {
       attachMediaListeners(mediaElement);
     }
@@ -227,12 +245,36 @@ function flushPendingNodes() {
 }
 
 function scheduleNodeNormalization(node) {
+  if (!nodeContainsMedia(node)) {
+    return;
+  }
+
   pendingNodes.add(node);
   if (flushTimerId !== null) {
     return;
   }
 
   flushTimerId = window.setTimeout(flushPendingNodes, 60);
+}
+
+function scheduleIdleMediaScan() {
+  if (idleScanTimerId !== null) {
+    return;
+  }
+
+  const runScan = () => {
+    idleScanTimerId = null;
+    if (document.visibilityState === "visible" && isSiteEnabled()) {
+      normalizeAllMedia();
+    }
+  };
+
+  if ("requestIdleCallback" in window) {
+    idleScanTimerId = window.requestIdleCallback(runScan, { timeout: 1000 });
+    return;
+  }
+
+  idleScanTimerId = window.setTimeout(runScan, 250);
 }
 
 /**
@@ -326,9 +368,7 @@ async function init() {
 
   // Low-frequency fallback for websites that bypass events/observers.
   window.setInterval(() => {
-    if (document.visibilityState === "visible" && isSiteEnabled()) {
-      normalizeAllMedia();
-    }
+    scheduleIdleMediaScan();
   }, FALLBACK_RESCAN_MS);
 
   debugLog(`Initialized for ${currentSiteId}`);
