@@ -53,7 +53,7 @@ function copyIcons(targetDir) {
 }
 
 function buildChromeManifest(baseManifest) {
-  const manifest = structuredClone(baseManifest);
+  const manifest = cloneJson(baseManifest);
   delete manifest.browser_specific_settings;
   manifest.background = {
     service_worker: "background.js"
@@ -62,11 +62,15 @@ function buildChromeManifest(baseManifest) {
 }
 
 function buildFirefoxManifest(baseManifest) {
-  const manifest = structuredClone(baseManifest);
+  const manifest = cloneJson(baseManifest);
   manifest.background = {
     scripts: ["background.js"]
   };
   return manifest;
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
 function listFiles(dirPath, baseDir = dirPath) {
@@ -86,7 +90,7 @@ function listFiles(dirPath, baseDir = dirPath) {
     });
   }
 
-  return files;
+  return files.sort((first, second) => first.relativePath.localeCompare(second.relativePath));
 }
 
 function createZip(targetDir, zipFileName) {
@@ -122,6 +126,13 @@ function buildTarget(targetDir, manifest) {
 
 async function main() {
   const baseManifest = readJson(path.join(ROOT_DIR, "manifest.json"));
+  const packageJson = readJson(path.join(ROOT_DIR, "package.json"));
+
+  if (packageJson.version !== baseManifest.version) {
+    throw new Error(
+      `package.json version ${packageJson.version} does not match manifest version ${baseManifest.version}`
+    );
+  }
 
   ensureCleanDir(DIST_DIR);
   buildTarget(CHROME_DIR, buildChromeManifest(baseManifest));

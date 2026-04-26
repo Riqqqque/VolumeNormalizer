@@ -27,8 +27,6 @@ const DEFAULT_SETTINGS = {
   }, {})
 };
 
-const SAVE_DEBOUNCE_MS = 150;
-
 const heroVolumeValue = document.getElementById("heroVolumeValue");
 const enabledSitesValue = document.getElementById("enabledSitesValue");
 const volumeSlider = document.getElementById("volumeSlider");
@@ -39,9 +37,6 @@ const sitesSectionHint = document.getElementById("sitesSectionHint");
 const sitesList = document.getElementById("sitesList");
 
 let currentSettings = { ...DEFAULT_SETTINGS };
-let pendingSave = {};
-let pendingSaveTimerId = null;
-let saveSequence = Promise.resolve();
 
 function sendRuntimeMessage(message) {
   return new Promise((resolve) => {
@@ -130,10 +125,11 @@ function saveSettingsDirectly(settingsPatch) {
   });
 }
 
-async function saveSettingsNow(settingsPatch) {
+async function saveSettingsNow(settingsPatch, debounce) {
   const response = await sendRuntimeMessage({
     type: "save-settings",
-    settingsPatch
+    settingsPatch,
+    debounce
   });
 
   if (response && response.ok) {
@@ -148,33 +144,8 @@ async function saveSettingsNow(settingsPatch) {
   }
 }
 
-async function flushPendingSave() {
-  if (pendingSaveTimerId !== null) {
-    window.clearTimeout(pendingSaveTimerId);
-    pendingSaveTimerId = null;
-  }
-
-  if (Object.keys(pendingSave).length === 0) {
-    return;
-  }
-
-  const settingsPatch = pendingSave;
-  pendingSave = {};
-  saveSequence = saveSequence.then(() => saveSettingsNow(settingsPatch));
-  await saveSequence;
-}
-
 function queueSave(settingsPatch, immediate = false) {
-  pendingSave = { ...pendingSave, ...settingsPatch };
-
-  if (immediate) {
-    return flushPendingSave();
-  }
-
-  if (pendingSaveTimerId !== null) {
-    window.clearTimeout(pendingSaveTimerId);
-  }
-  pendingSaveTimerId = window.setTimeout(flushPendingSave, SAVE_DEBOUNCE_MS);
+  return saveSettingsNow(settingsPatch, !immediate);
 }
 
 function getEnabledSiteCount(enabledSites) {
