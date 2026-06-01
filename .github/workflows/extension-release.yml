@@ -1,0 +1,129 @@
+name: Extension Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      publish_chrome:
+        description: "Upload and publish the Chrome Web Store package"
+        required: true
+        type: boolean
+        default: false
+      publish_firefox:
+        description: "Submit the Firefox package to AMO"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and validate
+        run: npm run check
+
+      - name: Upload extension packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-packages
+          path: |
+            dist/VolumeNormalizer-Chrome.zip
+            dist/VolumeNormalizer-Firefox.zip
+          if-no-files-found: error
+
+  publish-firefox:
+    needs: build
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_firefox }}
+    runs-on: ubuntu-latest
+    env:
+      WEB_EXT_API_KEY: ${{ secrets.WEB_EXT_API_KEY }}
+      WEB_EXT_API_SECRET: ${{ secrets.WEB_EXT_API_SECRET }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Firefox package
+        run: npm run build
+
+      - name: Check Firefox credentials
+        run: |
+          test -n "$WEB_EXT_API_KEY"
+          test -n "$WEB_EXT_API_SECRET"
+
+      - name: Submit to Firefox Add-ons
+        run: >
+          npx web-ext sign
+          --source-dir dist/firefox
+          --artifacts-dir dist/firefox-signed
+          --channel listed
+          --approval-timeout 0
+
+      - name: Upload signed Firefox artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firefox-signed
+          path: dist/firefox-signed/*
+          if-no-files-found: warn
+
+  publish-chrome:
+    needs: build
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_chrome }}
+    runs-on: ubuntu-latest
+    env:
+      CHROME_PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
+      CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+      CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+      CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+      CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Chrome package
+        run: npm run build
+
+      - name: Check Chrome credentials
+        run: |
+          test -n "$CHROME_PUBLISHER_ID"
+          test -n "$CHROME_EXTENSION_ID"
+          test -n "$CHROME_CLIENT_ID"
+          test -n "$CHROME_CLIENT_SECRET"
+          test -n "$CHROME_REFRESH_TOKEN"
+
+      - name: Upload and publish to Chrome Web Store
+        run: npm run publish:chrome

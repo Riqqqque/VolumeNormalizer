@@ -1,33 +1,116 @@
-# How to Publish the Extension
+# Publishing
 
 Brave is Chromium-based, so you can publish this extension to the Chrome Web Store.
 That listing will also serve Chrome, Brave, Edge, and Opera users.
 
-Build the packages first with `npm install` and `npm run build`.
+Build the packages first with `npm ci` and `npm run check`.
 
-## Prerequisites
+## Normal Update Flow
 
-1. Google account
-2. Chrome Web Store developer registration (one-time fee)
-3. Upload package (`.zip`) for the extension from `dist/`
+1. Bump the extension version:
 
-## Publish Steps
+```powershell
+npm run version:set -- 2.0.7
+```
+
+If no version is passed, the script bumps the patch version.
+
+2. Build and validate:
+
+```powershell
+npm run check
+```
+
+3. Commit, tag, and push:
+
+```powershell
+git add manifest.json package.json package-lock.json
+git commit -m "Release 2.0.7"
+git tag v2.0.7
+git push origin main v2.0.7
+```
+
+The `Extension Release` GitHub Actions workflow builds both store ZIP files for every `v*.*.*` tag.
+
+## One-Time GitHub Secrets
+
+Add these in GitHub: `Settings` -> `Secrets and variables` -> `Actions` -> `New repository secret`.
+
+Firefox Add-ons:
+
+```text
+WEB_EXT_API_KEY
+WEB_EXT_API_SECRET
+```
+
+These are the AMO JWT issuer and JWT secret from the Mozilla Add-ons developer credentials page.
+
+Chrome Web Store:
+
+```text
+CHROME_PUBLISHER_ID
+CHROME_EXTENSION_ID
+CHROME_CLIENT_ID
+CHROME_CLIENT_SECRET
+CHROME_REFRESH_TOKEN
+```
+
+Chrome requires the Chrome Web Store API to be enabled in a Google Cloud project, an OAuth client, and a refresh token with the `https://www.googleapis.com/auth/chromewebstore` scope.
+
+Keep these values only in GitHub Secrets or your local shell environment. Do not commit them.
+
+## Publishing From GitHub Actions
+
+After secrets are set, open the `Extension Release` workflow in GitHub Actions and click `Run workflow`.
+
+Set:
+
+```text
+publish_chrome = true
+publish_firefox = true
+```
+
+Chrome uploads `dist/VolumeNormalizer-Chrome.zip` and calls the Chrome Web Store publish endpoint. Firefox submits `dist/firefox` through `web-ext sign --channel listed`.
+
+You can also start the workflow from the terminal:
+
+```powershell
+gh workflow run "Extension Release" -f publish_chrome=true -f publish_firefox=true
+```
+
+## Local Publishing
+
+Local Chrome publish, after setting the Chrome environment variables:
+
+```powershell
+npm run build
+npm run publish:chrome
+```
+
+Local Firefox publish, after setting `WEB_EXT_API_KEY` and `WEB_EXT_API_SECRET`:
+
+```powershell
+npm run build
+npm run publish:firefox
+```
+
+## Manual Dashboard Fallback
+
+Chrome:
 
 1. Open the Chrome Web Store Developer Dashboard.
-2. Create a new item and upload `dist/VolumeNormalizer-Chrome.zip`.
-3. Complete listing metadata:
-- Description
-- Category
-- Language
-- Screenshots
-- Promotional assets (if requested)
-4. Complete privacy section:
-- Explain that only `storage` is used
-- Clarify data collection behavior
-5. Submit for review.
+2. Upload `dist/VolumeNormalizer-Chrome.zip` to the existing item.
+3. Submit for review.
 
-## Updating
+Firefox:
 
-1. Increment `version` in `manifest.json`.
-2. Run `npm run build`.
-3. Upload the new package in the existing listing.
+1. Open the Add-ons Developer Hub.
+2. Upload `dist/VolumeNormalizer-Firefox.zip` to the existing add-on.
+3. Submit for review.
+
+## Important Notes
+
+- The manifest version must be higher than the latest store version.
+- The Firefox `browser_specific_settings.gecko.id` must match the existing AMO listing.
+- Chrome may require the listing and privacy tabs to be completed manually before API publishing works.
+- If Chrome visibility settings are changed manually, publish once from the dashboard before using API publishing again.
