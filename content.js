@@ -6,7 +6,10 @@
 const PROCESSED_ATTR = "data-volume-normalized";
 const MEDIA_SELECTOR = "video, audio";
 const VOLUME_EPSILON = 0.01;
-const FALLBACK_RESCAN_MS = 5000;
+const FALLBACK_RESCAN_MS = 10000;
+const PENDING_FLUSH_BUDGET_MS = 4;
+const PENDING_FLUSH_TIMEOUT_MS = 250;
+const MAX_PENDING_NODES = 250;
 const DEBUG = false;
 
 // Site configuration - maps site IDs to domain patterns
@@ -41,7 +44,11 @@ const currentSiteId = getCurrentSiteId(window.location.hostname);
 
 const attachedMedia = new WeakSet();
 const internalVolumeSet = new WeakMap();
-let pendingNodes = new Set();
+const passiveListenerOptions = { passive: true };
+let pendingNodes = [];
+let pendingNodeSet = new WeakSet();
+let pendingNodeCursor = 0;
+let pendingFullPageScan = false;
 let flushTimerId = null;
 let idleScanTimerId = null;
 
@@ -124,6 +131,18 @@ function shouldUpdateVolume(element, targetVolume) {
   return Math.abs(element.volume - targetVolume) > VOLUME_EPSILON;
 }
 
+function getNow() {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+}
+
+function markElementProcessed(element, volumeAttribute) {
+  if (element.getAttribute(PROCESSED_ATTR) !== volumeAttribute) {
+    element.setAttribute(PROCESSED_ATTR, volumeAttribute);
+  }
+}
+
 function setVolumeSafely(element, targetVolume) {
   if (!shouldUpdateVolume(element, targetVolume) || internalVolumeSet.get(element)) {
     return;
@@ -150,7 +169,7 @@ function attachMediaListeners(element) {
     }
 
     setVolumeSafely(element, getTargetVolume());
-    element.setAttribute(PROCESSED_ATTR, String(currentSettings.volume));
+    markElementProcessed(element, String(currentSettings.volume));
   };
 
   element.addEventListener("volumechange", () => {
@@ -158,9 +177,9 @@ function attachMediaListeners(element) {
       return;
     }
     reapplyVolume();
-  });
-  element.addEventListener("play", reapplyVolume);
-  element.addEventListener("loadeddata", reapplyVolume);
+  }, passiveListenerOptions);
+  element.addEventListener("play", reapplyVolume, passiveListenerOptions);
+  element.addEventListener("loadeddata", reapplyVolume, passiveListenerOptions);
 
   attachedMedia.add(element);
 }
@@ -179,31 +198,30 @@ function normalizeMediaElement(
 
   attachMediaListeners(element);
   setVolumeSafely(element, targetVolume);
-  element.setAttribute(PROCESSED_ATTR, volumeAttribute);
+  markElementProcessed(element, volumeAttribute);
 }
 
-function normalizeMediaNode(node) {
-  if (!(node instanceof Element)) {
+function normalizeMediaNode(
+  node,
+  targetVolume = getTargetVolume(),
+  volumeAttribute = String(currentSettings.volume)
+) {
+  if (!(node instanceof Element) || !node.isConnected) {
     return;
   }
 
-  const targetVolume = getTargetVolume();
-  const volumeAttribute = String(currentSettings.volume);
-
-  if (node.matches(MEDIA_SELECTOR)) {
+  if (node instanceof HTMLMediaElement) {
     normalizeMediaElement(node, targetVolume, volumeAttribute);
+    return;
+  }
+
+  if (node.childElementCount === 0) {
+    return;
   }
 
   node.querySelectorAll(MEDIA_SELECTOR).forEach((mediaElement) => {
     normalizeMediaElement(mediaElement, targetVolume, volumeAttribute);
   });
-}
-
-function nodeContainsMedia(node) {
-  return (
-    node instanceof Element &&
-    (node.matches(MEDIA_SELECTOR) || node.querySelector(MEDIA_SELECTOR) !== null)
-  );
 }
 
 /**
@@ -230,31 +248,111 @@ function normalizeAllMedia() {
   });
 }
 
-function flushPendingNodes() {
+function resetPendingQueue() {
+  pendingNodes = [];
+  pendingNodeSet = new WeakSet();
+  pendingNodeCursor = 0;
+  pendingFullPageScan = false;
+}
+
+function coalescePendingQueueToPageScan() {
+  pendingNodes = [document.documentElement];
+  pendingNodeSet = new WeakSet(pendingNodes);
+  pendingNodeCursor = 0;
+  pendingFullPageScan = true;
+}
+
+function shouldPauseFlush(startTime, deadline, processedCount) {
+  if (processedCount === 0) {
+    return false;
+  }
+
+  if (getNow() - startTime >= PENDING_FLUSH_BUDGET_MS) {
+    return true;
+  }
+
+  if (deadline && typeof deadline.timeRemaining === "function") {
+    return !deadline.didTimeout && deadline.timeRemaining() < 1;
+  }
+
+  return false;
+}
+
+function flushPendingNodes(deadline = null) {
   flushTimerId = null;
 
   if (!isSiteEnabled()) {
-    pendingNodes.clear();
+    resetPendingQueue();
     return;
   }
 
-  for (const node of pendingNodes) {
-    normalizeMediaNode(node);
+  const targetVolume = getTargetVolume();
+  const volumeAttribute = String(currentSettings.volume);
+  const startTime = getNow();
+  let processedCount = 0;
+
+  while (pendingNodeCursor < pendingNodes.length) {
+    const node = pendingNodes[pendingNodeCursor];
+    pendingNodeCursor += 1;
+    processedCount += 1;
+
+    normalizeMediaNode(node, targetVolume, volumeAttribute);
+
+    if (shouldPauseFlush(startTime, deadline, processedCount)) {
+      break;
+    }
   }
-  pendingNodes.clear();
+
+  if (pendingNodeCursor >= pendingNodes.length) {
+    resetPendingQueue();
+    return;
+  }
+
+  schedulePendingFlush();
 }
 
-function scheduleNodeNormalization(node) {
-  if (!nodeContainsMedia(node)) {
-    return;
-  }
-
-  pendingNodes.add(node);
+function schedulePendingFlush() {
   if (flushTimerId !== null) {
     return;
   }
 
-  flushTimerId = window.setTimeout(flushPendingNodes, 60);
+  if ("requestIdleCallback" in window) {
+    flushTimerId = window.requestIdleCallback(flushPendingNodes, {
+      timeout: PENDING_FLUSH_TIMEOUT_MS
+    });
+    return;
+  }
+
+  flushTimerId = window.setTimeout(flushPendingNodes, PENDING_FLUSH_TIMEOUT_MS);
+}
+
+function scheduleNodeNormalization(node) {
+  if (!(node instanceof Element) || !isSiteEnabled()) {
+    return;
+  }
+
+  if (node instanceof HTMLMediaElement) {
+    normalizeMediaElement(node);
+    return;
+  }
+
+  if (node.childElementCount === 0 || pendingFullPageScan) {
+    return;
+  }
+
+  if (pendingNodeSet.has(node)) {
+    return;
+  }
+
+  if (pendingNodes.length - pendingNodeCursor >= MAX_PENDING_NODES) {
+    coalescePendingQueueToPageScan();
+    schedulePendingFlush();
+    return;
+  }
+
+  pendingNodes.push(node);
+  pendingNodeSet.add(node);
+  schedulePendingFlush();
 }
 
 function scheduleIdleMediaScan() {
