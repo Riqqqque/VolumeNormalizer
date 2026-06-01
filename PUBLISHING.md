@@ -70,7 +70,7 @@ Keep these values only in GitHub Secrets or your local shell environment. Do not
 After enabling the Chrome Web Store API, run this helper to create the OAuth approval URL, capture the callback locally, and save the Chrome secrets:
 
 ```powershell
-.\scripts\setup-chrome-oauth.ps1
+npm run setup:chrome
 ```
 
 Use a Google Cloud OAuth client with application type `Desktop app`.
