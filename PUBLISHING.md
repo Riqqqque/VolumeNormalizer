@@ -36,6 +36,14 @@ The `Extension Release` GitHub Actions workflow builds both store ZIP files for 
 
 Add these in GitHub: `Settings` -> `Secrets and variables` -> `Actions` -> `New repository secret`.
 
+Or run the local helper and paste the values into its prompts:
+
+```powershell
+.\scripts\setup-release-secrets.ps1
+```
+
+Use `-FirefoxOnly` or `-ChromeOnly` if you want to set up one store at a time.
+
 Firefox Add-ons:
 
 ```text
@@ -75,8 +83,10 @@ Chrome uploads `dist/VolumeNormalizer-Chrome.zip` and calls the Chrome Web Store
 You can also start the workflow from the terminal:
 
 ```powershell
-gh workflow run "Extension Release" -f publish_chrome=true -f publish_firefox=true
+.\scripts\run-release-workflow.ps1
 ```
+
+Use `-Chrome` or `-Firefox` to publish only one store.
 
 ## Local Publishing
 
