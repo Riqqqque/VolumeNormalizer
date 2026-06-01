@@ -407,7 +407,13 @@
       transition: transform 0.18s ease, box-shadow 0.18s ease;
     }
 
-    .volume-slider:hover::-webkit-slider-thumb,
+    .volume-slider:hover::-webkit-slider-thumb {
+      transform: scale(1.08);
+      box-shadow:
+        0 0 0 6px rgba(123, 44, 191, 0.18),
+        0 10px 22px rgba(0, 0, 0, 0.3);
+    }
+
     .volume-slider:hover::-moz-range-thumb {
       transform: scale(1.08);
       box-shadow:
