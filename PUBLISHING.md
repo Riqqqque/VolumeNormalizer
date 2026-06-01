@@ -67,6 +67,14 @@ Chrome requires the Chrome Web Store API to be enabled in a Google Cloud project
 
 Keep these values only in GitHub Secrets or your local shell environment. Do not commit them.
 
+After enabling the Chrome Web Store API, run this helper to create the OAuth approval URL, capture the callback locally, and save the Chrome secrets:
+
+```powershell
+.\scripts\setup-chrome-oauth.ps1
+```
+
+Use a Google Cloud OAuth client with application type `Desktop app`.
+
 ## Publishing From GitHub Actions
 
 After secrets are set, open the `Extension Release` workflow in GitHub Actions and click `Run workflow`.
