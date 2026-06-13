@@ -13,6 +13,7 @@ Browser extension that normalizes video/audio element volume on selected high-no
 ## Supported Sites
 
 - X / Twitter
+- Bluesky
 - TikTok
 - Instagram
 - Facebook

@@ -15,6 +15,7 @@ const DEBUG = false;
 // Site configuration - maps site IDs to domain patterns
 const SITE_DOMAINS = {
   x: ["twitter.com", "x.com"],
+  bluesky: ["bsky.app"],
   tiktok: ["tiktok.com"],
   instagram: ["instagram.com"],
   facebook: ["facebook.com"],

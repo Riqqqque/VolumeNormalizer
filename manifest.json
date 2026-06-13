@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Volume Normalizer",
-  "version": "2.0.6",
+  "version": "2.0.7",
   "description": "Automatically normalizes video volume on loud websites like X, TikTok, Instagram, YouTube, and more",
   "permissions": ["storage"],
   "icons": {
@@ -27,6 +27,8 @@
         "*://*.twitter.com/*",
         "*://x.com/*",
         "*://*.x.com/*",
+        "*://bsky.app/*",
+        "*://*.bsky.app/*",
         "*://tiktok.com/*",
         "*://*.tiktok.com/*",
         "*://instagram.com/*",

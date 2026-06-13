@@ -1,12 +1,13 @@
 {
   "name": "volume-normalizer",
-  "version": "2.0.6",
+  "version": "2.0.7",
   "private": true,
   "scripts": {
     "build": "node scripts/build.js",
-    "lint:scripts": "node --check background.js && node --check content.js && node --check popup.js && node --check scripts/build.js && node --check scripts/bump-version.js && node --check scripts/publish-chrome.js && node --check scripts/setup-chrome-oauth-server.js",
+    "lint:scripts": "node --check background.js && node --check content.js && node --check popup.js && node --check scripts/build.js && node --check scripts/bump-version.js && node --check scripts/check-sites.js && node --check scripts/publish-chrome.js && node --check scripts/setup-chrome-oauth-server.js",
     "lint:firefox": "web-ext lint --source-dir dist/firefox",
-    "check": "npm run build && npm run lint:scripts && npm run lint:firefox",
+    "lint:sites": "node scripts/check-sites.js",
+    "check": "npm run build && npm run lint:scripts && npm run lint:sites && npm run lint:firefox",
     "version:set": "node scripts/bump-version.js",
     "publish:chrome": "node scripts/publish-chrome.js",
     "publish:firefox": "web-ext sign --source-dir dist/firefox --artifacts-dir dist/firefox-signed --channel listed --approval-timeout 0",
