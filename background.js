@@ -5,6 +5,7 @@
 
 const SITE_IDS = [
   "x",
+  "bluesky",
   "tiktok",
   "instagram",
   "facebook",

@@ -5,6 +5,7 @@
 
 const SITES = [
   { id: "x", name: "X / Twitter", icon: "X" },
+  { id: "bluesky", name: "Bluesky", icon: "BS" },
   { id: "tiktok", name: "TikTok", icon: "TT" },
   { id: "instagram", name: "Instagram", icon: "IG" },
   { id: "facebook", name: "Facebook", icon: "FB" },
