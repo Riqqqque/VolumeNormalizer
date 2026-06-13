@@ -80,12 +80,7 @@ jobs:
           test -n "$WEB_EXT_API_SECRET"
 
       - name: Submit to Firefox Add-ons
-        run: >
-          npx web-ext sign
-          --source-dir dist/firefox
-          --artifacts-dir dist/firefox-signed
-          --channel listed
-          --approval-timeout 0
+        run: npm run publish:firefox
 
       - name: Upload signed Firefox artifact
         uses: actions/upload-artifact@v4

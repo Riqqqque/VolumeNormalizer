@@ -10,7 +10,7 @@
     "check": "npm run build && npm run lint:scripts && npm run lint:sites && npm run lint:firefox",
     "version:set": "node scripts/bump-version.js",
     "publish:chrome": "node scripts/publish-chrome.js",
-    "publish:firefox": "web-ext sign --source-dir dist/firefox --artifacts-dir dist/firefox-signed --channel listed --approval-timeout 0",
+    "publish:firefox": "web-ext sign --source-dir dist/firefox --artifacts-dir dist/firefox-signed --channel listed --amo-metadata amo-metadata.json --approval-timeout 0",
     "setup:chrome": "node scripts/setup-chrome-oauth-server.js",
     "setup:firefox": "node scripts/setup-firefox-secrets-server.js"
   },

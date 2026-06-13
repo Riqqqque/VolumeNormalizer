@@ -92,7 +92,7 @@ publish_chrome = true
 publish_firefox = true
 ```
 
-Chrome uploads `dist/VolumeNormalizer-Chrome.zip` and calls the Chrome Web Store publish endpoint. Firefox submits `dist/firefox` through `web-ext sign --channel listed`.
+Chrome uploads `dist/VolumeNormalizer-Chrome.zip` and calls the Chrome Web Store publish endpoint. Firefox submits `dist/firefox` through `web-ext sign --channel listed` with the AMO metadata in `amo-metadata.json`.
 
 You can also start the workflow from the terminal:
 
