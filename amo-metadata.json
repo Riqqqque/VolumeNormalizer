@@ -1,4 +1,16 @@
 {
+  "name": {
+    "en-US": "Volume Normalizer"
+  },
+  "summary": {
+    "en-US": "Automatically normalizes video volume on loud websites like X, TikTok, Instagram, YouTube, and more."
+  },
+  "categories": {
+    "firefox": [
+      "photos-music-videos"
+    ]
+  },
+  "requires_payment": false,
   "version": {
     "license": "all-rights-reserved"
   }
