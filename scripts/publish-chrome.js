@@ -32,7 +32,12 @@ async function requestJson(url, options) {
   }
 
   if (!response.ok) {
-    const detail = payload.error?.message || payload.raw || response.statusText;
+    const detail =
+      payload.error_description ||
+      payload.error?.message ||
+      payload.error ||
+      payload.raw ||
+      response.statusText;
     throw new Error(`${response.status} ${response.statusText}: ${detail}`);
   }
 
