@@ -53,6 +53,12 @@ WEB_EXT_API_SECRET
 
 These are the AMO JWT issuer and JWT secret from the Mozilla Add-ons developer credentials page.
 
+To save only the Firefox secrets through a local browser form:
+
+```powershell
+npm run setup:firefox
+```
+
 Chrome Web Store:
 
 ```text
