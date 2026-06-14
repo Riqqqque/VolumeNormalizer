@@ -1,7 +1,8 @@
 {
   "name": "volume-normalizer",
-  "version": "2.0.7",
+  "version": "2.0.8",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "build": "node scripts/build.js",
     "lint:scripts": "node --check background.js && node --check content.js && node --check popup.js && node --check scripts/build.js && node --check scripts/bump-version.js && node --check scripts/check-sites.js && node --check scripts/publish-chrome.js && node --check scripts/setup-chrome-oauth-server.js && node --check scripts/setup-firefox-secrets-server.js",
@@ -15,7 +16,7 @@
     "setup:firefox": "node scripts/setup-firefox-secrets-server.js"
   },
   "devDependencies": {
-    "web-ext": "^9.4.0",
+    "web-ext": "^10.4.0",
     "yazl": "^3.3.1"
   }
 }

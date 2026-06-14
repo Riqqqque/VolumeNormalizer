@@ -1,7 +1,9 @@
 const http = require("http");
+const crypto = require("crypto");
 const { spawn, spawnSync } = require("child_process");
 
 const HOST = "127.0.0.1";
+const setupToken = crypto.randomBytes(18).toString("hex");
 let server;
 
 function escapeHtml(value) {
@@ -122,6 +124,7 @@ function sendSetupPage(response, error = "") {
     <p class="note">Open <a href="https://addons.mozilla.org/en-US/developers/addon/api/key/" target="_blank">Firefox Add-ons API credentials</a>, copy the JWT issuer and JWT secret, then paste them below.</p>
     ${errorHtml}
     <form method="post" action="/save">
+      <input type="hidden" name="setupToken" value="${setupToken}">
       <label>WEB_EXT_API_KEY / JWT issuer
         <input name="apiKey" autocomplete="off" required>
       </label>
@@ -156,6 +159,12 @@ function requireField(fields, name) {
   return String(value).trim();
 }
 
+function verifySetupToken(fields) {
+  if (fields.get("setupToken") !== setupToken) {
+    throw new Error("Setup form token did not match. Reload the local setup page and try again.");
+  }
+}
+
 function setGitHubSecret(name, value) {
   const result = spawnSync("gh", ["secret", "set", name], {
     input: value,
@@ -171,6 +180,7 @@ function setGitHubSecret(name, value) {
 async function handleSave(request, response) {
   const body = await readRequestBody(request);
   const fields = new URLSearchParams(body);
+  verifySetupToken(fields);
 
   setGitHubSecret("WEB_EXT_API_KEY", requireField(fields, "apiKey"));
   setGitHubSecret("WEB_EXT_API_SECRET", requireField(fields, "apiSecret"));
@@ -180,7 +190,7 @@ async function handleSave(request, response) {
     200,
     "Firefox Setup Complete",
     `<h1>Firefox setup complete</h1>
-    <p>Firefox Add-ons secrets were saved to GitHub Actions. You can close this tab and tell Codex <strong>done</strong>.</p>`
+    <p>Firefox Add-ons secrets were saved to GitHub Actions. You can close this tab and tell me <strong>done</strong>.</p>`
   );
 
   setTimeout(() => server.close(), 1500);
