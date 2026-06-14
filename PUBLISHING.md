@@ -10,7 +10,7 @@ Build the packages first with `npm ci` and `npm run check`.
 1. Bump the extension version:
 
 ```powershell
-npm run version:set -- 2.0.7
+npm run version:set -- 2.0.8
 ```
 
 If no version is passed, the script bumps the patch version.
@@ -25,9 +25,9 @@ npm run check
 
 ```powershell
 git add manifest.json package.json package-lock.json
-git commit -m "Release 2.0.7"
-git tag v2.0.7
-git push origin main v2.0.7
+git commit -m "Release 2.0.8"
+git tag v2.0.8
+git push origin main v2.0.8
 ```
 
 The `Extension Release` GitHub Actions workflow builds both store ZIP files for every `v*.*.*` tag.

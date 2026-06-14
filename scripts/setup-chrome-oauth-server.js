@@ -4,6 +4,7 @@ const { spawn, spawnSync } = require("child_process");
 
 const HOST = "127.0.0.1";
 const CHROME_SCOPE = "https://www.googleapis.com/auth/chromewebstore";
+const setupToken = crypto.randomBytes(18).toString("hex");
 const state = crypto.randomBytes(18).toString("hex");
 
 let chromeValues = null;
@@ -128,6 +129,7 @@ function sendSetupPage(response, error = "") {
     <p class="note">Open the <a href="https://chrome.google.com/webstore/devconsole/" target="_blank">Chrome Web Store dashboard</a> for the publisher ID and extension ID. If the item does not exist yet, create/upload it once in the dashboard first.</p>
     ${errorHtml}
     <form method="post" action="/start">
+      <input type="hidden" name="setupToken" value="${setupToken}">
       <label>CHROME_PUBLISHER_ID
         <input name="publisherId" autocomplete="off" required>
       </label>
@@ -166,6 +168,12 @@ function requireField(fields, name) {
     throw new Error(`Missing ${name}`);
   }
   return String(value).trim();
+}
+
+function verifySetupToken(fields) {
+  if (fields.get("setupToken") !== setupToken) {
+    throw new Error("Setup form token did not match. Reload the local setup page and try again.");
+  }
 }
 
 function setGitHubSecret(name, value) {
@@ -213,6 +221,7 @@ async function exchangeCodeForRefreshToken(code, redirectUri) {
 async function handleStart(request, response, baseUrl) {
   const body = await readRequestBody(request);
   const fields = new URLSearchParams(body);
+  verifySetupToken(fields);
 
   chromeValues = {
     publisherId: requireField(fields, "publisherId"),
@@ -269,7 +278,7 @@ async function handleOAuthCallback(request, response, baseUrl) {
     200,
     "Chrome Setup Complete",
     `<h1>Chrome setup complete</h1>
-    <p>Chrome Web Store secrets were saved to GitHub Actions. You can close this tab and tell Codex <strong>done</strong>.</p>`
+    <p>Chrome Web Store secrets were saved to GitHub Actions. You can close this tab and tell me <strong>done</strong>.</p>`
   );
 
   setTimeout(() => server.close(), 1500);

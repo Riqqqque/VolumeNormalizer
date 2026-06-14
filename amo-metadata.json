@@ -12,6 +12,6 @@
   },
   "requires_payment": false,
   "version": {
-    "license": "all-rights-reserved"
+    "license": "MIT"
   }
 }

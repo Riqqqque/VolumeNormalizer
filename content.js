@@ -381,6 +381,10 @@ function scheduleIdleMediaScan() {
  */
 function setupObserver() {
   const observer = new MutationObserver((mutations) => {
+    if (!isSiteEnabled()) {
+      return;
+    }
+
     for (const mutation of mutations) {
       if (mutation.type === "childList") {
         mutation.addedNodes.forEach((addedNode) => {
@@ -389,22 +393,12 @@ function setupObserver() {
           }
         });
       }
-
-      if (
-        mutation.type === "attributes" &&
-        mutation.target instanceof HTMLMediaElement
-      ) {
-        mutation.target.removeAttribute(PROCESSED_ATTR);
-        scheduleNodeNormalization(mutation.target);
-      }
     }
   });
 
   observer.observe(document.documentElement, {
     childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ["src"]
+    subtree: true
   });
 }
 
