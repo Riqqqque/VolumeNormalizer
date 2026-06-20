@@ -46,12 +46,15 @@ const currentSiteId = getCurrentSiteId(window.location.hostname);
 const attachedMedia = new WeakSet();
 const internalVolumeSet = new WeakMap();
 const passiveListenerOptions = { passive: true };
+const observedRootTargets = new Set();
+const observedRootSet = new WeakSet();
 let pendingNodes = [];
 let pendingNodeSet = new WeakSet();
 let pendingNodeCursor = 0;
 let pendingFullPageScan = false;
 let flushTimerId = null;
 let idleScanTimerId = null;
+let mediaObserver = null;
 
 function debugLog(...args) {
   if (DEBUG) {
@@ -205,15 +208,24 @@ function normalizeMediaElement(
 function normalizeMediaNode(
   node,
   targetVolume = getTargetVolume(),
-  volumeAttribute = String(currentSettings.volume)
+  volumeAttribute = String(currentSettings.volume),
+  discoverShadowRoots = true
 ) {
-  if (!(node instanceof Element) || !node.isConnected) {
+  if (!(node instanceof Element) && !(node instanceof DocumentFragment)) {
+    return;
+  }
+
+  if (node instanceof Element && !node.isConnected) {
     return;
   }
 
   if (node instanceof HTMLMediaElement) {
     normalizeMediaElement(node, targetVolume, volumeAttribute);
     return;
+  }
+
+  if (discoverShadowRoots) {
+    observeShadowRootsInTree(node, targetVolume, volumeAttribute);
   }
 
   if (node.childElementCount === 0) {
@@ -225,27 +237,92 @@ function normalizeMediaNode(
   });
 }
 
+function observeRootTarget(rootTarget) {
+  if (!mediaObserver || !rootTarget) {
+    return false;
+  }
+
+  if (observedRootSet.has(rootTarget)) {
+    observedRootTargets.add(rootTarget);
+    return false;
+  }
+
+  mediaObserver.observe(rootTarget, {
+    childList: true,
+    subtree: true
+  });
+  observedRootSet.add(rootTarget);
+  observedRootTargets.add(rootTarget);
+  return true;
+}
+
+function isRootTargetConnected(rootTarget) {
+  if (rootTarget instanceof ShadowRoot) {
+    return rootTarget.host.isConnected;
+  }
+
+  if (rootTarget instanceof Element) {
+    return rootTarget.isConnected;
+  }
+
+  return true;
+}
+
+function pruneObservedRootTargets() {
+  observedRootTargets.forEach((rootTarget) => {
+    if (!isRootTargetConnected(rootTarget)) {
+      observedRootTargets.delete(rootTarget);
+    }
+  });
+}
+
+function observeShadowRoot(shadowRoot, targetVolume, volumeAttribute) {
+  if (!shadowRoot) {
+    return;
+  }
+
+  const isNewRoot = observeRootTarget(shadowRoot);
+  if (isNewRoot) {
+    normalizeMediaNode(shadowRoot, targetVolume, volumeAttribute, true);
+  }
+}
+
+function observeShadowRootForElement(element, targetVolume, volumeAttribute) {
+  if (element.shadowRoot) {
+    observeShadowRoot(element.shadowRoot, targetVolume, volumeAttribute);
+  }
+}
+
+function observeShadowRootsInTree(root, targetVolume, volumeAttribute) {
+  if (root instanceof Element) {
+    observeShadowRootForElement(root, targetVolume, volumeAttribute);
+  }
+
+  if (root.childElementCount === 0) {
+    return;
+  }
+
+  root.querySelectorAll("*").forEach((element) => {
+    observeShadowRootForElement(element, targetVolume, volumeAttribute);
+  });
+}
+
 /**
  * Find and normalize all media elements on the page.
  */
-function normalizeAllMedia() {
+function normalizeAllMedia(discoverShadowRoots = true) {
   if (!isSiteEnabled()) {
     return;
   }
 
   const targetVolume = getTargetVolume();
   const volumeAttribute = String(currentSettings.volume);
+  pruneObservedRootTargets();
+  const roots =
+    observedRootTargets.size > 0 ? Array.from(observedRootTargets) : [document.documentElement];
 
-  document.querySelectorAll(MEDIA_SELECTOR).forEach((mediaElement) => {
-    const lastVolume = mediaElement.getAttribute(PROCESSED_ATTR);
-    if (
-      lastVolume !== volumeAttribute ||
-      shouldUpdateVolume(mediaElement, targetVolume)
-    ) {
-      normalizeMediaElement(mediaElement, targetVolume, volumeAttribute);
-    } else {
-      attachMediaListeners(mediaElement);
-    }
+  roots.forEach((root) => {
+    normalizeMediaNode(root, targetVolume, volumeAttribute, discoverShadowRoots);
   });
 }
 
@@ -337,7 +414,7 @@ function scheduleNodeNormalization(node) {
     return;
   }
 
-  if (node.childElementCount === 0 || pendingFullPageScan) {
+  if ((node.childElementCount === 0 && !node.shadowRoot) || pendingFullPageScan) {
     return;
   }
 
@@ -364,7 +441,7 @@ function scheduleIdleMediaScan() {
   const runScan = () => {
     idleScanTimerId = null;
     if (document.visibilityState === "visible" && isSiteEnabled()) {
-      normalizeAllMedia();
+      normalizeAllMedia(false);
     }
   };
 
@@ -380,7 +457,7 @@ function scheduleIdleMediaScan() {
  * Set up MutationObserver to catch dynamically added media.
  */
 function setupObserver() {
-  const observer = new MutationObserver((mutations) => {
+  mediaObserver = new MutationObserver((mutations) => {
     if (!isSiteEnabled()) {
       return;
     }
@@ -396,10 +473,7 @@ function setupObserver() {
     }
   });
 
-  observer.observe(document.documentElement, {
-    childList: true,
-    subtree: true
-  });
+  observeRootTarget(document.documentElement);
 }
 
 function loadSettings() {
