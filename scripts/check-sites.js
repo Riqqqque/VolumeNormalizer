@@ -8,11 +8,24 @@ const SITES = [
   { id: "tiktok", domains: ["tiktok.com"], displayName: "TikTok" },
   { id: "instagram", domains: ["instagram.com"], displayName: "Instagram" },
   { id: "facebook", domains: ["facebook.com"], displayName: "Facebook" },
-  { id: "youtube", domains: ["youtube.com"], displayName: "YouTube" },
+  {
+    id: "youtube",
+    domains: ["youtube.com", "youtube-nocookie.com", "youtu.be"],
+    displayName: "YouTube"
+  },
   { id: "twitch", domains: ["twitch.tv"], displayName: "Twitch" },
   { id: "reddit", domains: ["reddit.com"], displayName: "Reddit" },
   { id: "dailymotion", domains: ["dailymotion.com"], displayName: "Dailymotion" },
   { id: "vimeo", domains: ["vimeo.com"], displayName: "Vimeo" },
+  { id: "streamable", domains: ["streamable.com"], displayName: "Streamable" },
+  { id: "rumble", domains: ["rumble.com"], displayName: "Rumble" },
+  { id: "kick", domains: ["kick.com"], displayName: "Kick" },
+  {
+    id: "jwplayer",
+    domains: ["jwplayer.com", "jwplatform.com"],
+    displayName: "JW Player"
+  },
+  { id: "brightcove", domains: ["brightcove.net"], displayName: "Brightcove" },
   { id: "snapchat", domains: ["snapchat.com"], displayName: "Snapchat" },
   { id: "pinterest", domains: ["pinterest.com"], displayName: "Pinterest" },
   { id: "tumblr", domains: ["tumblr.com"], displayName: "Tumblr" },
