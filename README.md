@@ -22,6 +22,11 @@ Browser extension that normalizes video/audio element volume on selected high-no
 - Reddit
 - Dailymotion
 - Vimeo
+- Streamable
+- Rumble
+- Kick
+- JW Player
+- Brightcove
 - Snapchat
 - Pinterest
 - Tumblr
