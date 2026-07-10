@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Volume Normalizer",
-  "version": "2.0.10",
+  "version": "2.0.11",
   "description": "Automatically normalizes video volume on loud websites like X, TikTok, Instagram, YouTube, and more",
   "permissions": [
     "storage"
@@ -22,6 +22,7 @@
   },
   "background": {
     "scripts": [
+      "sites.js",
       "background.js"
     ],
     "service_worker": "background.js"
@@ -77,10 +78,13 @@
         "*://*.linkedin.com/*"
       ],
       "js": [
+        "sites.js",
         "content.js"
       ],
       "run_at": "document_start",
-      "all_frames": true
+      "all_frames": true,
+      "match_about_blank": true,
+      "match_origin_as_fallback": true
     }
   ],
   "action": {

@@ -6,7 +6,13 @@ const ROOT_DIR = path.resolve(__dirname, "..");
 const DIST_DIR = path.join(ROOT_DIR, "dist");
 const CHROME_DIR = path.join(DIST_DIR, "chrome");
 const FIREFOX_DIR = path.join(DIST_DIR, "firefox");
-const SOURCE_FILES = ["background.js", "content.js", "popup.html", "popup.js"];
+const SOURCE_FILES = [
+  "sites.js",
+  "background.js",
+  "content.js",
+  "popup.html",
+  "popup.js"
+];
 const ICON_EXTENSIONS = new Set([".png", ".svg"]);
 
 function readJson(filePath) {
@@ -64,7 +70,7 @@ function buildChromeManifest(baseManifest) {
 function buildFirefoxManifest(baseManifest) {
   const manifest = cloneJson(baseManifest);
   manifest.background = {
-    scripts: ["background.js"]
+    scripts: ["sites.js", "background.js"]
   };
   return manifest;
 }

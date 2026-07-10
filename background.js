@@ -1,29 +1,17 @@
 /**
- * Volume Normalizer - Background Script
  * Persists settings outside the popup lifecycle so writes survive popup teardown.
  */
 
-const SITE_IDS = [
-  "x",
-  "bluesky",
-  "tiktok",
-  "instagram",
-  "facebook",
-  "youtube",
-  "twitch",
-  "reddit",
-  "dailymotion",
-  "vimeo",
-  "streamable",
-  "rumble",
-  "kick",
-  "jwplayer",
-  "brightcove",
-  "snapchat",
-  "pinterest",
-  "tumblr",
-  "linkedin"
-];
+if (!globalThis.VOLUME_NORMALIZER_SITES && typeof importScripts === "function") {
+  importScripts("sites.js");
+}
+
+const SITES = globalThis.VOLUME_NORMALIZER_SITES;
+if (!Array.isArray(SITES) || SITES.length === 0) {
+  throw new Error("Volume Normalizer site configuration is unavailable");
+}
+
+const SITE_IDS = SITES.map((site) => site.id);
 
 const DEFAULT_SETTINGS = {
   volume: 25,

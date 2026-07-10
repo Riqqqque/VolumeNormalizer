@@ -6,9 +6,12 @@ Browser extension that normalizes video/audio element volume on selected high-no
 
 - Automatic volume normalization on supported websites
 - Adjustable global target volume (0-100)
+- Quick volume presets and mouse-wheel adjustment
 - Per-site enable/disable toggles
+- Enable or disable all supported sites at once
 - Persistent settings using browser sync storage
-- Works with dynamic page updates via MutationObserver
+- Embedded-player support for related frames and open shadow roots
+- Time-sliced media discovery for busy feeds
 
 ## Supported Sites
 
@@ -34,12 +37,13 @@ Browser extension that normalizes video/audio element volume on selected high-no
 
 ## Project Structure
 
+- `sites.js`: Shared supported-site catalog
 - `background.js`: Persists settings outside the popup lifecycle
 - `content.js`: Applies and re-applies normalized volume on media elements
 - `popup.html`: Extension popup UI
 - `popup.js`: Popup behavior and settings persistence
 - `manifest.json`: Cross-browser MV3 source manifest
-- `scripts/build.js`: Produces Chrome and Firefox build outputs in `dist/`
+- `scripts/build.js`: Produces Chrome and Firefox build outputs and store ZIP files in `dist/`
 - `package.json`: Build and validation scripts
 
 ## Build
@@ -67,12 +71,13 @@ Browser extension that normalizes video/audio element volume on selected high-no
 
 ## Validation
 
-- `npm run check`: Builds the extension and runs script syntax checks plus Firefox linting.
+- `npm run check`: Builds both targets, validates site/build consistency, checks script syntax, and runs Firefox linting.
 
 ## Development Notes
 
 - Settings are stored in `chrome.storage.sync`.
 - Content script uses exact domain/subdomain matching (no loose substring matching).
+- Large DOM updates are scanned in short idle-time slices instead of blocking the page.
 - Popup writes are proxied through the background script so final saves survive popup teardown.
 - Build output strips BOMs and generates browser-specific manifests from the root source manifest.
 
