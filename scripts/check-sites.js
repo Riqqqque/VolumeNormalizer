@@ -1,36 +1,8 @@
 const fs = require("fs");
 const path = require("path");
+const SITES = require("../sites.js");
 
 const ROOT_DIR = path.resolve(__dirname, "..");
-const SITES = [
-  { id: "x", domains: ["twitter.com", "x.com"], displayName: "X / Twitter" },
-  { id: "bluesky", domains: ["bsky.app"], displayName: "Bluesky" },
-  { id: "tiktok", domains: ["tiktok.com"], displayName: "TikTok" },
-  { id: "instagram", domains: ["instagram.com"], displayName: "Instagram" },
-  { id: "facebook", domains: ["facebook.com"], displayName: "Facebook" },
-  {
-    id: "youtube",
-    domains: ["youtube.com", "youtube-nocookie.com", "youtu.be"],
-    displayName: "YouTube"
-  },
-  { id: "twitch", domains: ["twitch.tv"], displayName: "Twitch" },
-  { id: "reddit", domains: ["reddit.com"], displayName: "Reddit" },
-  { id: "dailymotion", domains: ["dailymotion.com"], displayName: "Dailymotion" },
-  { id: "vimeo", domains: ["vimeo.com"], displayName: "Vimeo" },
-  { id: "streamable", domains: ["streamable.com"], displayName: "Streamable" },
-  { id: "rumble", domains: ["rumble.com"], displayName: "Rumble" },
-  { id: "kick", domains: ["kick.com"], displayName: "Kick" },
-  {
-    id: "jwplayer",
-    domains: ["jwplayer.com", "jwplatform.com"],
-    displayName: "JW Player"
-  },
-  { id: "brightcove", domains: ["brightcove.net"], displayName: "Brightcove" },
-  { id: "snapchat", domains: ["snapchat.com"], displayName: "Snapchat" },
-  { id: "pinterest", domains: ["pinterest.com"], displayName: "Pinterest" },
-  { id: "tumblr", domains: ["tumblr.com"], displayName: "Tumblr" },
-  { id: "linkedin", domains: ["linkedin.com"], displayName: "LinkedIn" }
-];
 
 function readText(relativePath) {
   return fs.readFileSync(path.join(ROOT_DIR, relativePath), "utf8");
@@ -40,29 +12,36 @@ function readJson(relativePath) {
   return JSON.parse(readText(relativePath));
 }
 
-function assertIncludes(sourceName, sourceText, expectedText, errors) {
-  if (!sourceText.includes(expectedText)) {
-    errors.push(`${sourceName} is missing ${expectedText}`);
-  }
-}
-
 function main() {
   const errors = [];
-  const contentScript = readText("content.js");
-  const backgroundScript = readText("background.js");
+  const ids = new Set();
+  const domains = new Set();
   const popupScript = readText("popup.js");
+  const popupHtml = readText("popup.html");
   const readme = readText("README.md");
   const manifest = readJson("manifest.json");
-  const matches = new Set(manifest.content_scripts?.[0]?.matches || []);
+  const contentScriptDefinition = manifest.content_scripts?.[0] || {};
+  const matches = new Set(contentScriptDefinition.matches || []);
 
   for (const site of SITES) {
-    assertIncludes("content.js", contentScript, `${site.id}:`, errors);
-    assertIncludes("background.js", backgroundScript, `"${site.id}"`, errors);
-    assertIncludes("popup.js", popupScript, `id: "${site.id}"`, errors);
-    assertIncludes("README.md", readme, site.displayName, errors);
+    if (ids.has(site.id)) {
+      errors.push(`sites.js has duplicate site ID ${site.id}`);
+    }
+    ids.add(site.id);
+
+    if (!popupScript.includes("VOLUME_NORMALIZER_SITES")) {
+      errors.push("popup.js does not use the shared site catalog");
+    }
+    if (!readme.includes(site.name)) {
+      errors.push(`README.md is missing ${site.name}`);
+    }
 
     for (const domain of site.domains) {
-      assertIncludes("content.js", contentScript, `"${domain}"`, errors);
+      if (domains.has(domain)) {
+        errors.push(`sites.js has duplicate domain ${domain}`);
+      }
+      domains.add(domain);
+
       if (!matches.has(`*://${domain}/*`)) {
         errors.push(`manifest.json is missing *://${domain}/*`);
       }
@@ -72,13 +51,31 @@ function main() {
     }
   }
 
+  if (matches.size !== domains.size * 2) {
+    errors.push(
+      `manifest.json has ${matches.size} matches; expected ${domains.size * 2}`
+    );
+  }
+  if (contentScriptDefinition.all_frames !== true) {
+    errors.push("manifest.json must enable all_frames for embedded players");
+  }
+  if (contentScriptDefinition.match_about_blank !== true) {
+    errors.push("manifest.json must enable match_about_blank for related frames");
+  }
+  if (contentScriptDefinition.match_origin_as_fallback !== true) {
+    errors.push("manifest.json must enable match_origin_as_fallback for related frames");
+  }
+  if (!popupHtml.includes(`${SITES.length}/${SITES.length}`)) {
+    errors.push("popup.html has a stale enabled-site fallback count");
+  }
+
   if (errors.length > 0) {
-    console.error(errors.join("\n"));
+    console.error([...new Set(errors)].join("\n"));
     process.exitCode = 1;
     return;
   }
 
-  console.log(`Checked ${SITES.length} supported sites`);
+  console.log(`Checked ${SITES.length} supported sites and ${domains.size} domains`);
 }
 
 main();

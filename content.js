@@ -1,70 +1,53 @@
 /**
- * Volume Normalizer - Content Script
- * Automatically normalizes video/audio volume on configured sites.
+ * Applies the configured volume target to media on supported sites.
  */
 
+const SITES = globalThis.VOLUME_NORMALIZER_SITES;
 const PROCESSED_ATTR = "data-volume-normalized";
-const MEDIA_SELECTOR = "video, audio";
 const VOLUME_EPSILON = 0.01;
-const FALLBACK_RESCAN_MS = 10000;
-const PENDING_FLUSH_BUDGET_MS = 4;
-const PENDING_FLUSH_TIMEOUT_MS = 250;
-const MAX_PENDING_NODES = 250;
+const MEDIA_RECHECK_MS = 10000;
+const DISCOVERY_RESCAN_MS = 60000;
+const SCAN_BUDGET_MS = 4;
+const SCAN_TIMEOUT_MS = 250;
+const MAX_QUEUED_SCANS = 128;
+const SHOW_ELEMENT = 1;
 const DEBUG = false;
 
-// Site configuration - maps site IDs to domain patterns
-const SITE_DOMAINS = {
-  x: ["twitter.com", "x.com"],
-  bluesky: ["bsky.app"],
-  tiktok: ["tiktok.com"],
-  instagram: ["instagram.com"],
-  facebook: ["facebook.com"],
-  youtube: ["youtube.com", "youtube-nocookie.com", "youtu.be"],
-  twitch: ["twitch.tv"],
-  reddit: ["reddit.com"],
-  dailymotion: ["dailymotion.com"],
-  vimeo: ["vimeo.com"],
-  streamable: ["streamable.com"],
-  rumble: ["rumble.com"],
-  kick: ["kick.com"],
-  jwplayer: ["jwplayer.com", "jwplatform.com"],
-  brightcove: ["brightcove.net"],
-  snapchat: ["snapchat.com"],
-  pinterest: ["pinterest.com"],
-  tumblr: ["tumblr.com"],
-  linkedin: ["linkedin.com"]
-};
+if (!Array.isArray(SITES) || SITES.length === 0) {
+  throw new Error("Volume Normalizer site configuration is unavailable");
+}
 
-// Default settings
 const DEFAULT_SETTINGS = {
   volume: 25,
-  enabledSites: Object.keys(SITE_DOMAINS).reduce((acc, siteId) => {
-    acc[siteId] = true;
-    return acc;
+  enabledSites: SITES.reduce((enabledSites, site) => {
+    enabledSites[site.id] = true;
+    return enabledSites;
   }, {})
 };
 
-// Current settings (loaded from storage)
-let currentSettings = { ...DEFAULT_SETTINGS };
-const currentSiteId = getCurrentSiteId(window.location.hostname);
-
+let currentSettings = cloneDefaultSettings();
+const currentSiteId = getCurrentSiteId();
 const attachedMedia = new WeakSet();
-const internalVolumeSet = new WeakMap();
-const passiveListenerOptions = { passive: true };
-const observedRootTargets = new Set();
-const observedRootSet = new WeakSet();
-let pendingNodes = [];
-let pendingNodeSet = new WeakSet();
-let pendingNodeCursor = 0;
-let pendingFullPageScan = false;
-let flushTimerId = null;
-let idleScanTimerId = null;
+const trackedMedia = new Set();
+const observedRoots = new Set();
+let observedRootSet = new WeakSet();
+let scanJobs = [];
+let scanJobCursor = 0;
+let queuedScanRoots = new WeakSet();
+let scanTimerId = null;
 let mediaObserver = null;
 
 function debugLog(...args) {
   if (DEBUG) {
     console.debug("[Volume Normalizer]", ...args);
   }
+}
+
+function cloneDefaultSettings() {
+  return {
+    volume: DEFAULT_SETTINGS.volume,
+    enabledSites: { ...DEFAULT_SETTINGS.enabledSites }
+  };
 }
 
 function clampVolume(rawValue) {
@@ -76,12 +59,12 @@ function clampVolume(rawValue) {
 }
 
 function sanitizeEnabledSites(rawEnabledSites) {
-  const enabledSites = {};
   const source =
     rawEnabledSites && typeof rawEnabledSites === "object" ? rawEnabledSites : {};
+  const enabledSites = {};
 
-  for (const siteId of Object.keys(SITE_DOMAINS)) {
-    enabledSites[siteId] = source[siteId] !== false;
+  for (const site of SITES) {
+    enabledSites[site.id] = source[site.id] !== false;
   }
 
   return enabledSites;
@@ -95,9 +78,6 @@ function sanitizeSettings(rawSettings) {
   };
 }
 
-/**
- * Match only exact domains or subdomains.
- */
 function hostnameMatchesDomain(hostname, domain) {
   const normalizedHostname = hostname.toLowerCase();
   const normalizedDomain = domain.toLowerCase();
@@ -107,37 +87,78 @@ function hostnameMatchesDomain(hostname, domain) {
   );
 }
 
-/**
- * Get the current site ID based on hostname.
- */
-function getCurrentSiteId(hostname) {
-  for (const [siteId, domains] of Object.entries(SITE_DOMAINS)) {
-    if (domains.some((domain) => hostnameMatchesDomain(hostname, domain))) {
-      return siteId;
+function addHostnameFromUrl(hostnames, rawUrl) {
+  if (!rawUrl) {
+    return;
+  }
+
+  try {
+    const parsedUrl = new URL(rawUrl);
+    if (parsedUrl.hostname) {
+      hostnames.add(parsedUrl.hostname);
+      return;
+    }
+
+    if (parsedUrl.origin && parsedUrl.origin !== "null") {
+      const originUrl = new URL(parsedUrl.origin);
+      if (originUrl.hostname) {
+        hostnames.add(originUrl.hostname);
+      }
+    }
+  } catch (error) {
+    debugLog("Could not inspect related frame URL:", error);
+  }
+}
+
+function getSiteIdForUrl(rawUrl) {
+  const hostnames = new Set();
+  addHostnameFromUrl(hostnames, rawUrl);
+
+  for (const site of SITES) {
+    if (
+      site.domains.some((domain) =>
+        Array.from(hostnames).some((hostname) => hostnameMatchesDomain(hostname, domain))
+      )
+    ) {
+      return site.id;
     }
   }
+
   return null;
 }
 
-/**
- * Check if the current site is enabled.
- */
-function isSiteEnabled() {
-  if (!currentSiteId) {
-    return false;
+function getCurrentSiteId() {
+  const directSiteId = getSiteIdForUrl(window.location.href);
+  if (directSiteId) {
+    return directSiteId;
   }
-  return currentSettings.enabledSites[currentSiteId] !== false;
+
+  const referrerSiteId = getSiteIdForUrl(document.referrer);
+  if (referrerSiteId) {
+    return referrerSiteId;
+  }
+
+  const ancestorOrigins = window.location.ancestorOrigins;
+  if (ancestorOrigins) {
+    for (let index = 0; index < ancestorOrigins.length; index += 1) {
+      const ancestorSiteId = getSiteIdForUrl(ancestorOrigins[index]);
+      if (ancestorSiteId) {
+        return ancestorSiteId;
+      }
+    }
+  }
+
+  return null;
 }
 
-/**
- * Get target volume (0-1 scale).
- */
+function isSiteEnabled() {
+  return Boolean(
+    currentSiteId && currentSettings.enabledSites[currentSiteId] !== false
+  );
+}
+
 function getTargetVolume() {
   return currentSettings.volume / 100;
-}
-
-function shouldUpdateVolume(element, targetVolume) {
-  return Math.abs(element.volume - targetVolume) > VOLUME_EPSILON;
 }
 
 function getNow() {
@@ -146,24 +167,23 @@ function getNow() {
     : Date.now();
 }
 
-function markElementProcessed(element, volumeAttribute) {
-  if (element.getAttribute(PROCESSED_ATTR) !== volumeAttribute) {
-    element.setAttribute(PROCESSED_ATTR, volumeAttribute);
+function setVolumeSafely(element, targetVolume) {
+  if (Math.abs(element.volume - targetVolume) <= VOLUME_EPSILON) {
+    return true;
+  }
+
+  try {
+    element.volume = targetVolume;
+    return Math.abs(element.volume - targetVolume) <= VOLUME_EPSILON;
+  } catch (error) {
+    debugLog("Failed to set media volume:", error);
+    return false;
   }
 }
 
-function setVolumeSafely(element, targetVolume) {
-  if (!shouldUpdateVolume(element, targetVolume) || internalVolumeSet.get(element)) {
-    return;
-  }
-
-  internalVolumeSet.set(element, true);
-  try {
-    element.volume = targetVolume;
-  } catch (error) {
-    debugLog("Failed to set volume on element:", error);
-  } finally {
-    internalVolumeSet.set(element, false);
+function markElementProcessed(element, volumeAttribute) {
+  if (element.getAttribute(PROCESSED_ATTR) !== volumeAttribute) {
+    element.setAttribute(PROCESSED_ATTR, volumeAttribute);
   }
 }
 
@@ -177,25 +197,18 @@ function attachMediaListeners(element) {
       return;
     }
 
-    setVolumeSafely(element, getTargetVolume());
-    markElementProcessed(element, String(currentSettings.volume));
+    const volumeAttribute = String(currentSettings.volume);
+    if (setVolumeSafely(element, getTargetVolume())) {
+      markElementProcessed(element, volumeAttribute);
+    }
   };
 
-  element.addEventListener("volumechange", () => {
-    if (internalVolumeSet.get(element)) {
-      return;
-    }
-    reapplyVolume();
-  }, passiveListenerOptions);
-  element.addEventListener("play", reapplyVolume, passiveListenerOptions);
-  element.addEventListener("loadeddata", reapplyVolume, passiveListenerOptions);
-
+  element.addEventListener("volumechange", reapplyVolume, { passive: true });
+  element.addEventListener("play", reapplyVolume, { passive: true });
+  element.addEventListener("loadedmetadata", reapplyVolume, { passive: true });
   attachedMedia.add(element);
 }
 
-/**
- * Normalize volume on one media element.
- */
 function normalizeMediaElement(
   element,
   targetVolume = getTargetVolume(),
@@ -205,167 +218,103 @@ function normalizeMediaElement(
     return;
   }
 
+  trackedMedia.add(element);
   attachMediaListeners(element);
-  setVolumeSafely(element, targetVolume);
-  markElementProcessed(element, volumeAttribute);
-}
 
-function normalizeMediaNode(
-  node,
-  targetVolume = getTargetVolume(),
-  volumeAttribute = String(currentSettings.volume),
-  discoverShadowRoots = true
-) {
-  if (!(node instanceof Element) && !(node instanceof DocumentFragment)) {
-    return;
-  }
-
-  if (node instanceof Element && !node.isConnected) {
-    return;
-  }
-
-  if (node instanceof HTMLMediaElement) {
-    normalizeMediaElement(node, targetVolume, volumeAttribute);
-    return;
-  }
-
-  if (discoverShadowRoots) {
-    observeShadowRootsInTree(node, targetVolume, volumeAttribute);
-  }
-
-  if (node.childElementCount === 0) {
-    return;
-  }
-
-  node.querySelectorAll(MEDIA_SELECTOR).forEach((mediaElement) => {
-    normalizeMediaElement(mediaElement, targetVolume, volumeAttribute);
-  });
-}
-
-function observeRootTarget(rootTarget) {
-  if (!mediaObserver || !rootTarget) {
-    return false;
-  }
-
-  if (observedRootSet.has(rootTarget)) {
-    observedRootTargets.add(rootTarget);
-    return false;
-  }
-
-  mediaObserver.observe(rootTarget, {
-    childList: true,
-    subtree: true
-  });
-  observedRootSet.add(rootTarget);
-  observedRootTargets.add(rootTarget);
-  return true;
-}
-
-function isRootTargetConnected(rootTarget) {
-  if (rootTarget instanceof ShadowRoot) {
-    return rootTarget.host.isConnected;
-  }
-
-  if (rootTarget instanceof Element) {
-    return rootTarget.isConnected;
-  }
-
-  return true;
-}
-
-function pruneObservedRootTargets() {
-  observedRootTargets.forEach((rootTarget) => {
-    if (!isRootTargetConnected(rootTarget)) {
-      observedRootTargets.delete(rootTarget);
-    }
-  });
-}
-
-function observeShadowRoot(shadowRoot, targetVolume, volumeAttribute) {
-  if (!shadowRoot) {
-    return;
-  }
-
-  const isNewRoot = observeRootTarget(shadowRoot);
-  if (isNewRoot) {
-    normalizeMediaNode(shadowRoot, targetVolume, volumeAttribute, true);
+  if (setVolumeSafely(element, targetVolume)) {
+    markElementProcessed(element, volumeAttribute);
   }
 }
 
-function observeShadowRootForElement(element, targetVolume, volumeAttribute) {
-  if (element.shadowRoot) {
-    observeShadowRoot(element.shadowRoot, targetVolume, volumeAttribute);
-  }
+function isScannableRoot(root) {
+  return (
+    root instanceof Document ||
+    root instanceof DocumentFragment ||
+    root instanceof Element
+  );
 }
 
-function observeShadowRootsInTree(root, targetVolume, volumeAttribute) {
+function isRootConnected(root) {
+  if (root instanceof ShadowRoot) {
+    return root.host.isConnected;
+  }
   if (root instanceof Element) {
-    observeShadowRootForElement(root, targetVolume, volumeAttribute);
+    return root.isConnected;
   }
+  return true;
+}
 
-  if (root.childElementCount === 0) {
+function observeRoot(root) {
+  if (!mediaObserver || !isScannableRoot(root) || observedRootSet.has(root)) {
     return;
   }
 
-  root.querySelectorAll("*").forEach((element) => {
-    observeShadowRootForElement(element, targetVolume, volumeAttribute);
-  });
+  mediaObserver.observe(root, { childList: true, subtree: true });
+  observedRootSet.add(root);
+  observedRoots.add(root);
 }
 
-/**
- * Find and normalize all media elements on the page.
- */
-function normalizeAllMedia(discoverShadowRoots = true) {
-  if (!isSiteEnabled()) {
-    return;
+function inspectElement(element, targetVolume, volumeAttribute) {
+  if (element instanceof HTMLMediaElement) {
+    normalizeMediaElement(element, targetVolume, volumeAttribute);
   }
 
-  const targetVolume = getTargetVolume();
-  const volumeAttribute = String(currentSettings.volume);
-  pruneObservedRootTargets();
-  const roots =
-    observedRootTargets.size > 0 ? Array.from(observedRootTargets) : [document.documentElement];
-
-  roots.forEach((root) => {
-    normalizeMediaNode(root, targetVolume, volumeAttribute, discoverShadowRoots);
-  });
-}
-
-function resetPendingQueue() {
-  pendingNodes = [];
-  pendingNodeSet = new WeakSet();
-  pendingNodeCursor = 0;
-  pendingFullPageScan = false;
-}
-
-function coalescePendingQueueToPageScan() {
-  pendingNodes = [document.documentElement];
-  pendingNodeSet = new WeakSet(pendingNodes);
-  pendingNodeCursor = 0;
-  pendingFullPageScan = true;
-}
-
-function shouldPauseFlush(startTime, deadline, processedCount) {
-  if (processedCount === 0) {
-    return false;
+  if (element.shadowRoot) {
+    observeRoot(element.shadowRoot);
+    queueRootScan(element.shadowRoot);
   }
+}
 
-  if (getNow() - startTime >= PENDING_FLUSH_BUDGET_MS) {
+function createScanJob(root) {
+  return {
+    root,
+    inspectedRoot: !(root instanceof Element),
+    walker: document.createTreeWalker(root, SHOW_ELEMENT)
+  };
+}
+
+function advanceScanJob(job, targetVolume, volumeAttribute) {
+  if (!job.inspectedRoot) {
+    job.inspectedRoot = true;
+    inspectElement(job.root, targetVolume, volumeAttribute);
     return true;
   }
 
-  if (deadline && typeof deadline.timeRemaining === "function") {
-    return !deadline.didTimeout && deadline.timeRemaining() < 1;
+  const element = job.walker.nextNode();
+  if (!element) {
+    return false;
   }
 
-  return false;
+  inspectElement(element, targetVolume, volumeAttribute);
+  return true;
 }
 
-function flushPendingNodes(deadline = null) {
-  flushTimerId = null;
+function shouldPauseScan(startTime, deadline, processedCount) {
+  if (processedCount === 0) {
+    return false;
+  }
+  if (getNow() - startTime >= SCAN_BUDGET_MS) {
+    return true;
+  }
+  return Boolean(
+    deadline &&
+      typeof deadline.timeRemaining === "function" &&
+      !deadline.didTimeout &&
+      deadline.timeRemaining() < 1
+  );
+}
+
+function resetScanQueue() {
+  scanJobs = [];
+  scanJobCursor = 0;
+  queuedScanRoots = new WeakSet();
+}
+
+function flushScanQueue(deadline = null) {
+  scanTimerId = null;
 
   if (!isSiteEnabled()) {
-    resetPendingQueue();
+    resetScanQueue();
     return;
   }
 
@@ -374,93 +323,135 @@ function flushPendingNodes(deadline = null) {
   const startTime = getNow();
   let processedCount = 0;
 
-  while (pendingNodeCursor < pendingNodes.length) {
-    const node = pendingNodes[pendingNodeCursor];
-    pendingNodeCursor += 1;
+  while (scanJobCursor < scanJobs.length) {
+    const job = scanJobs[scanJobCursor];
+
+    if (!isRootConnected(job.root)) {
+      queuedScanRoots.delete(job.root);
+      scanJobCursor += 1;
+      continue;
+    }
+
+    const hasMore = advanceScanJob(job, targetVolume, volumeAttribute);
     processedCount += 1;
 
-    normalizeMediaNode(node, targetVolume, volumeAttribute);
+    if (!hasMore) {
+      queuedScanRoots.delete(job.root);
+      scanJobCursor += 1;
+    }
 
-    if (shouldPauseFlush(startTime, deadline, processedCount)) {
+    if (shouldPauseScan(startTime, deadline, processedCount)) {
       break;
     }
   }
 
-  if (pendingNodeCursor >= pendingNodes.length) {
-    resetPendingQueue();
+  if (scanJobCursor >= scanJobs.length) {
+    resetScanQueue();
     return;
   }
 
-  schedulePendingFlush();
+  scheduleScanFlush();
 }
 
-function schedulePendingFlush() {
-  if (flushTimerId !== null) {
+function scheduleScanFlush() {
+  if (scanTimerId !== null) {
     return;
   }
 
-  if ("requestIdleCallback" in window) {
-    flushTimerId = window.requestIdleCallback(flushPendingNodes, {
-      timeout: PENDING_FLUSH_TIMEOUT_MS
+  if (typeof window.requestIdleCallback === "function") {
+    scanTimerId = window.requestIdleCallback(flushScanQueue, {
+      timeout: SCAN_TIMEOUT_MS
     });
     return;
   }
 
-  flushTimerId = window.setTimeout(flushPendingNodes, PENDING_FLUSH_TIMEOUT_MS);
+  scanTimerId = window.setTimeout(flushScanQueue, 16);
 }
 
-function scheduleNodeNormalization(node) {
-  if (!(node instanceof Element) || !isSiteEnabled()) {
-    return;
-  }
-
-  if (node instanceof HTMLMediaElement) {
-    normalizeMediaElement(node);
-    return;
-  }
-
-  if ((node.childElementCount === 0 && !node.shadowRoot) || pendingFullPageScan) {
-    return;
-  }
-
-  if (pendingNodeSet.has(node)) {
-    return;
-  }
-
-  if (pendingNodes.length - pendingNodeCursor >= MAX_PENDING_NODES) {
-    coalescePendingQueueToPageScan();
-    schedulePendingFlush();
-    return;
-  }
-
-  pendingNodes.push(node);
-  pendingNodeSet.add(node);
-  schedulePendingFlush();
+function coalesceScansToDocument() {
+  resetScanQueue();
+  queuedScanRoots.add(document);
+  scanJobs.push(createScanJob(document));
 }
 
-function scheduleIdleMediaScan() {
-  if (idleScanTimerId !== null) {
+function queueRootScan(root) {
+  if (!isScannableRoot(root) || !isRootConnected(root) || !isSiteEnabled()) {
     return;
   }
 
-  const runScan = () => {
-    idleScanTimerId = null;
-    if (document.visibilityState === "visible" && isSiteEnabled()) {
-      normalizeAllMedia(false);
+  if (root instanceof HTMLMediaElement) {
+    normalizeMediaElement(root);
+    return;
+  }
+
+  if (root instanceof Element && root.childElementCount === 0 && !root.shadowRoot) {
+    return;
+  }
+
+  if (queuedScanRoots.has(root)) {
+    return;
+  }
+
+  if (scanJobs.length - scanJobCursor >= MAX_QUEUED_SCANS) {
+    coalesceScansToDocument();
+  } else {
+    queuedScanRoots.add(root);
+    scanJobs.push(createScanJob(root));
+  }
+
+  scheduleScanFlush();
+}
+
+function pruneObservedRoots() {
+  const connectedRoots = [];
+  let removedRoot = false;
+
+  for (const root of observedRoots) {
+    if (isRootConnected(root)) {
+      connectedRoots.push(root);
+    } else {
+      removedRoot = true;
     }
-  };
+  }
 
-  if ("requestIdleCallback" in window) {
-    idleScanTimerId = window.requestIdleCallback(runScan, { timeout: 1000 });
+  if (!removedRoot) {
     return;
   }
 
-  idleScanTimerId = window.setTimeout(runScan, 250);
+  mediaObserver.disconnect();
+  observedRoots.clear();
+  observedRootSet = new WeakSet();
+  for (const root of connectedRoots) {
+    observeRoot(root);
+  }
 }
 
-/**
- * Set up MutationObserver to catch dynamically added media.
- */
+function normalizeTrackedMedia() {
+  const enabled = isSiteEnabled();
+  const targetVolume = getTargetVolume();
+  const volumeAttribute = String(currentSettings.volume);
+
+  for (const element of trackedMedia) {
+    if (!element.isConnected) {
+      trackedMedia.delete(element);
+      continue;
+    }
+    if (enabled) {
+      normalizeMediaElement(element, targetVolume, volumeAttribute);
+    }
+  }
+}
+
+function clearProcessedMarkers() {
+  for (const element of trackedMedia) {
+    if (!element.isConnected) {
+      trackedMedia.delete(element);
+      continue;
+    }
+    element.removeAttribute(PROCESSED_ATTR);
+  }
+}
+
 function setupObserver() {
   mediaObserver = new MutationObserver((mutations) => {
     if (!isSiteEnabled()) {
@@ -468,17 +459,15 @@ function setupObserver() {
     }
 
     for (const mutation of mutations) {
-      if (mutation.type === "childList") {
-        mutation.addedNodes.forEach((addedNode) => {
-          if (addedNode.nodeType === Node.ELEMENT_NODE) {
-            scheduleNodeNormalization(addedNode);
-          }
-        });
+      for (const addedNode of mutation.addedNodes) {
+        if (addedNode.nodeType === Node.ELEMENT_NODE) {
+          queueRootScan(addedNode);
+        }
       }
     }
   });
 
-  observeRootTarget(document.documentElement);
+  observeRoot(document);
 }
 
 function loadSettings() {
@@ -486,68 +475,101 @@ function loadSettings() {
     chrome.storage.sync.get(DEFAULT_SETTINGS, (settings) => {
       if (chrome.runtime.lastError) {
         debugLog("Failed to load settings:", chrome.runtime.lastError.message);
-        currentSettings = {
-          volume: DEFAULT_SETTINGS.volume,
-          enabledSites: { ...DEFAULT_SETTINGS.enabledSites }
-        };
-        resolve();
-        return;
+        currentSettings = cloneDefaultSettings();
+      } else {
+        currentSettings = sanitizeSettings(settings);
       }
-
-      currentSettings = sanitizeSettings(settings);
       resolve();
     });
   });
 }
 
-/**
- * Listen for settings changes.
- */
 function setupSettingsListener() {
   chrome.storage.onChanged.addListener((changes, namespace) => {
     if (namespace !== "sync") {
       return;
     }
 
-    const nextSettings = { ...currentSettings };
+    const wasEnabled = isSiteEnabled();
+    const nextSettings = {
+      volume: currentSettings.volume,
+      enabledSites: currentSettings.enabledSites
+    };
 
     if (changes.volume) {
       nextSettings.volume = clampVolume(changes.volume.newValue);
     }
-
     if (changes.enabledSites) {
       nextSettings.enabledSites = sanitizeEnabledSites(changes.enabledSites.newValue);
     }
 
     currentSettings = nextSettings;
-    normalizeAllMedia();
+    const isEnabled = isSiteEnabled();
+
+    if (!isEnabled) {
+      resetScanQueue();
+      if (wasEnabled) {
+        clearProcessedMarkers();
+      }
+      return;
+    }
+
+    normalizeTrackedMedia();
+    queueRootScan(document);
   });
 }
 
-/**
- * Initialize content script.
- */
+function setupFallbackChecks() {
+  window.setInterval(() => {
+    if (document.visibilityState === "visible") {
+      normalizeTrackedMedia();
+    }
+  }, MEDIA_RECHECK_MS);
+
+  window.setInterval(() => {
+    if (document.visibilityState === "visible" && isSiteEnabled()) {
+      pruneObservedRoots();
+      queueRootScan(document);
+    }
+  }, DISCOVERY_RESCAN_MS);
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && isSiteEnabled()) {
+      normalizeTrackedMedia();
+      queueRootScan(document);
+    }
+  });
+}
+
+function setupCapturedPlaybackCheck() {
+  document.addEventListener(
+    "play",
+    (event) => {
+      if (event.target instanceof HTMLMediaElement) {
+        normalizeMediaElement(event.target);
+      }
+    },
+    true
+  );
+}
+
 async function init() {
   if (!currentSiteId) {
-    debugLog("Site not supported for hostname:", window.location.hostname);
+    debugLog("No supported site found for this frame");
     return;
   }
 
   await loadSettings();
   setupSettingsListener();
   setupObserver();
-  normalizeAllMedia();
+  setupCapturedPlaybackCheck();
+  setupFallbackChecks();
 
-  // Low-frequency fallback for websites that bypass events/observers.
-  window.setInterval(() => {
-    scheduleIdleMediaScan();
-  }, FALLBACK_RESCAN_MS);
+  if (isSiteEnabled()) {
+    queueRootScan(document);
+  }
 
   debugLog(`Initialized for ${currentSiteId}`);
 }
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", init);
-} else {
-  init();
-}
+void init();

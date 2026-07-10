@@ -1,65 +1,38 @@
 /**
- * Volume Normalizer - Popup Script
- * Handles settings UI for volume level and site toggles.
+ * Popup controls and settings persistence.
  */
 
-const SITES = [
-  { id: "x", name: "X / Twitter", icon: "X" },
-  { id: "bluesky", name: "Bluesky", icon: "BS" },
-  { id: "tiktok", name: "TikTok", icon: "TT" },
-  { id: "instagram", name: "Instagram", icon: "IG" },
-  { id: "facebook", name: "Facebook", icon: "FB" },
-  { id: "youtube", name: "YouTube", icon: "YT" },
-  { id: "twitch", name: "Twitch", icon: "TW" },
-  { id: "reddit", name: "Reddit", icon: "RD" },
-  { id: "dailymotion", name: "Dailymotion", icon: "DM" },
-  { id: "vimeo", name: "Vimeo", icon: "VM" },
-  { id: "streamable", name: "Streamable", icon: "ST" },
-  { id: "rumble", name: "Rumble", icon: "RM" },
-  { id: "kick", name: "Kick", icon: "KI" },
-  { id: "jwplayer", name: "JW Player", icon: "JW" },
-  { id: "brightcove", name: "Brightcove", icon: "BC" },
-  { id: "snapchat", name: "Snapchat", icon: "SC" },
-  { id: "pinterest", name: "Pinterest", icon: "PN" },
-  { id: "tumblr", name: "Tumblr", icon: "TB" },
-  { id: "linkedin", name: "LinkedIn", icon: "LI" }
-];
+const SITES = globalThis.VOLUME_NORMALIZER_SITES;
+const SAVE_DELAY_MS = 140;
+
+if (!Array.isArray(SITES) || SITES.length === 0) {
+  throw new Error("Volume Normalizer site configuration is unavailable");
+}
 
 const DEFAULT_SETTINGS = {
   volume: 25,
-  enabledSites: SITES.reduce((acc, site) => {
-    acc[site.id] = true;
-    return acc;
+  enabledSites: SITES.reduce((enabledSites, site) => {
+    enabledSites[site.id] = true;
+    return enabledSites;
   }, {})
 };
 
-const heroVolumeValue = document.getElementById("heroVolumeValue");
 const enabledSitesValue = document.getElementById("enabledSitesValue");
 const volumeSlider = document.getElementById("volumeSlider");
 const volumeInput = document.getElementById("volumeInput");
 const volumeTone = document.getElementById("volumeTone");
-const volumeProgressFill = document.getElementById("volumeProgressFill");
-const sitesSectionHint = document.getElementById("sitesSectionHint");
+const presetButtons = document.getElementById("presetButtons");
 const sitesList = document.getElementById("sitesList");
+const enableAllButton = document.getElementById("enableAllButton");
+const disableAllButton = document.getElementById("disableAllButton");
+const saveStatus = document.getElementById("saveStatus");
+const versionValue = document.getElementById("versionValue");
 
-let currentSettings = { ...DEFAULT_SETTINGS };
-
-function sendRuntimeMessage(message) {
-  return new Promise((resolve) => {
-    chrome.runtime.sendMessage(message, (response) => {
-      if (chrome.runtime.lastError) {
-        console.warn(
-          "[Volume Normalizer] Runtime messaging failed:",
-          chrome.runtime.lastError.message
-        );
-        resolve(null);
-        return;
-      }
-
-      resolve(response ?? null);
-    });
-  });
-}
+let currentSettings = cloneDefaultSettings();
+let pendingSavePatch = {};
+let saveTimerId = null;
+let saveSequence = Promise.resolve();
+let saveRevision = 0;
 
 function cloneDefaultSettings() {
   return {
@@ -77,12 +50,13 @@ function clampVolume(rawValue) {
 }
 
 function sanitizeEnabledSites(rawEnabledSites) {
-  const source = rawEnabledSites && typeof rawEnabledSites === "object" ? rawEnabledSites : {};
+  const source =
+    rawEnabledSites && typeof rawEnabledSites === "object" ? rawEnabledSites : {};
   const enabledSites = {};
 
-  SITES.forEach((site) => {
+  for (const site of SITES) {
     enabledSites[site.id] = source[site.id] !== false;
-  });
+  }
 
   return enabledSites;
 }
@@ -95,69 +69,137 @@ function sanitizeSettings(rawSettings) {
   };
 }
 
-async function loadSettings() {
-  const response = await sendRuntimeMessage({ type: "get-settings" });
-  if (response && response.ok && response.settings) {
-    return sanitizeSettings(response.settings);
-  }
+function sendRuntimeMessage(message) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(message, (response) => {
+      if (chrome.runtime.lastError) {
+        resolve(null);
+        return;
+      }
+      resolve(response ?? null);
+    });
+  });
+}
 
+function getStoredSettings() {
   return new Promise((resolve) => {
     chrome.storage.sync.get(DEFAULT_SETTINGS, (settings) => {
       if (chrome.runtime.lastError) {
-        console.warn(
-          "[Volume Normalizer] Failed to load settings:",
-          chrome.runtime.lastError.message
-        );
         resolve(cloneDefaultSettings());
         return;
       }
-
       resolve(sanitizeSettings(settings));
     });
   });
 }
 
+async function loadSettings() {
+  const response = await sendRuntimeMessage({ type: "get-settings" });
+  if (response?.ok && response.settings) {
+    return sanitizeSettings(response.settings);
+  }
+  return getStoredSettings();
+}
+
 function saveSettingsDirectly(settingsPatch) {
   return new Promise((resolve) => {
     chrome.storage.sync.set(settingsPatch, () => {
-      if (chrome.runtime.lastError) {
-        console.warn(
-          "[Volume Normalizer] Failed to save settings:",
-          chrome.runtime.lastError.message
-        );
-      }
-      resolve();
+      resolve(!chrome.runtime.lastError);
     });
   });
 }
 
-async function saveSettingsNow(settingsPatch, debounce) {
+async function saveSettingsNow(settingsPatch) {
   const response = await sendRuntimeMessage({
     type: "save-settings",
     settingsPatch,
-    debounce
+    debounce: false
   });
 
-  if (response && response.ok) {
-    return;
+  if (response?.ok) {
+    return true;
+  }
+  return saveSettingsDirectly(settingsPatch);
+}
+
+function setSaveStatus(state) {
+  saveStatus.dataset.state = state;
+  if (state === "saving") {
+    saveStatus.textContent = "Saving";
+  } else if (state === "error") {
+    saveStatus.textContent = "Save failed";
+  } else {
+    saveStatus.textContent = "Saved";
+  }
+}
+
+function flushQueuedSave() {
+  if (saveTimerId !== null) {
+    clearTimeout(saveTimerId);
+    saveTimerId = null;
   }
 
-  if (!response || !response.ok) {
-    const errorMessage =
-      response && response.error ? response.error : "background save unavailable";
-    console.warn("[Volume Normalizer] Failed to save settings:", errorMessage);
-    await saveSettingsDirectly(settingsPatch);
+  if (Object.keys(pendingSavePatch).length === 0) {
+    return saveSequence;
   }
+
+  const settingsPatch = pendingSavePatch;
+  const revision = saveRevision;
+  pendingSavePatch = {};
+
+  const savePromise = saveSequence
+    .catch(() => {})
+    .then(() => saveSettingsNow(settingsPatch));
+  saveSequence = savePromise;
+
+  savePromise.then((saved) => {
+    if (revision === saveRevision && Object.keys(pendingSavePatch).length === 0) {
+      setSaveStatus(saved ? "saved" : "error");
+    }
+  });
+
+  return savePromise;
 }
 
 function queueSave(settingsPatch, immediate = false) {
-  return saveSettingsNow(settingsPatch, !immediate);
+  pendingSavePatch = { ...pendingSavePatch, ...settingsPatch };
+  saveRevision += 1;
+  setSaveStatus("saving");
+
+  if (immediate) {
+    return flushQueuedSave();
+  }
+
+  if (saveTimerId !== null) {
+    clearTimeout(saveTimerId);
+  }
+  saveTimerId = window.setTimeout(flushQueuedSave, SAVE_DELAY_MS);
+  return saveSequence;
+}
+
+function flushPendingSaveOnClose() {
+  if (Object.keys(pendingSavePatch).length === 0) {
+    return;
+  }
+
+  const settingsPatch = pendingSavePatch;
+  pendingSavePatch = {};
+  if (saveTimerId !== null) {
+    clearTimeout(saveTimerId);
+    saveTimerId = null;
+  }
+
+  chrome.runtime.sendMessage(
+    { type: "save-settings", settingsPatch, debounce: false },
+    () => void chrome.runtime.lastError
+  );
 }
 
 function getEnabledSiteCount(enabledSites) {
-  return SITES.reduce((count, site) => {
-    return count + (enabledSites[site.id] !== false ? 1 : 0);
-  }, 0);
+  return SITES.reduce(
+    (count, site) => count + (enabledSites[site.id] !== false ? 1 : 0),
+    0
+  );
 }
 
 function getVolumeToneLabel(volume) {
@@ -179,93 +221,66 @@ function getVolumeToneLabel(volume) {
   return "Maxed";
 }
 
-function updateEnabledSitesUi(enabledSites) {
-  const enabledCount = getEnabledSiteCount(enabledSites);
-  enabledSitesValue.textContent = `${enabledCount}/${SITES.length}`;
-
-  if (enabledCount === SITES.length) {
-    sitesSectionHint.textContent = "All supported sites are active";
-    return;
-  }
-
-  if (enabledCount === 0) {
-    sitesSectionHint.textContent = "No sites are active";
-    return;
-  }
-
-  sitesSectionHint.textContent = `${enabledCount} site${enabledCount === 1 ? "" : "s"} active`;
-}
-
 function sanitizeVolumeInputText(rawValue) {
   return String(rawValue ?? "")
     .replace(/[^\d]/g, "")
     .slice(0, 3);
 }
 
-function syncVolumeInputWidth(value) {
-  const digitCount = Math.max(1, String(value).length);
-  volumeInput.style.width = `${digitCount}ch`;
+function updatePresetUi(volume) {
+  const buttons = presetButtons.querySelectorAll("[data-volume]");
+  buttons.forEach((button) => {
+    button.setAttribute(
+      "aria-pressed",
+      String(Number(button.dataset.volume) === volume)
+    );
+  });
 }
 
 function setVolumeUi(value) {
   const displayValue = String(value);
-  volumeSlider.value = String(value);
+  volumeSlider.value = displayValue;
+  volumeSlider.style.setProperty("--volume-percent", `${value}%`);
   volumeInput.value = displayValue;
-  syncVolumeInputWidth(displayValue);
-  heroVolumeValue.textContent = `${value}%`;
   volumeTone.textContent = getVolumeToneLabel(value);
-  volumeProgressFill.style.width = `${value}%`;
+  updatePresetUi(value);
 }
 
 function updateVolume(value, immediateSave = false) {
   const normalizedVolume = clampVolume(value);
+  const changed = currentSettings.volume !== normalizedVolume;
   setVolumeUi(normalizedVolume);
 
-  if (currentSettings.volume === normalizedVolume) {
-    return;
+  if (changed) {
+    currentSettings = { ...currentSettings, volume: normalizedVolume };
   }
 
-  currentSettings = {
-    ...currentSettings,
-    volume: normalizedVolume
-  };
-  queueSave({ volume: normalizedVolume }, immediateSave);
+  if (changed || immediateSave) {
+    queueSave({ volume: normalizedVolume }, immediateSave);
+  }
+}
+
+function updateEnabledSitesUi(enabledSites) {
+  enabledSitesValue.textContent = `${getEnabledSiteCount(enabledSites)}/${SITES.length}`;
 }
 
 function createSiteToggle(site, enabled) {
-  const div = document.createElement("div");
-  div.className = "site-toggle";
-  div.dataset.enabled = enabled ? "true" : "false";
+  const container = document.createElement("div");
+  container.className = "site-toggle";
+  container.dataset.enabled = String(enabled);
 
-  const siteInfo = document.createElement("div");
-  siteInfo.className = "site-info";
+  const icon = document.createElement("span");
+  icon.className = "site-icon";
+  icon.textContent = site.icon;
+  icon.setAttribute("aria-hidden", "true");
 
-  const iconSpan = document.createElement("span");
-  iconSpan.className = "site-icon";
-  iconSpan.textContent = site.icon;
-
-  const siteCopy = document.createElement("div");
-  siteCopy.className = "site-copy";
-
-  const nameSpan = document.createElement("span");
-  nameSpan.className = "site-name";
-  nameSpan.textContent = site.name;
-
-  const stateSpan = document.createElement("span");
-  stateSpan.className = "site-state";
-  stateSpan.textContent = enabled ? "On" : "Off";
-
-  siteCopy.appendChild(nameSpan);
-  siteCopy.appendChild(stateSpan);
-
-  siteInfo.appendChild(iconSpan);
-  siteInfo.appendChild(siteCopy);
-
-  const siteAction = document.createElement("div");
-  siteAction.className = "site-action";
+  const name = document.createElement("span");
+  name.className = "site-name";
+  name.textContent = site.name;
+  name.title = site.name;
 
   const label = document.createElement("label");
-  label.className = "toggle";
+  label.className = "switch";
 
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
@@ -273,45 +288,48 @@ function createSiteToggle(site, enabled) {
   checkbox.checked = enabled;
   checkbox.setAttribute("aria-label", `${site.name} enabled`);
 
-  const slider = document.createElement("span");
-  slider.className = "toggle-slider";
+  const track = document.createElement("span");
+  track.className = "switch-track";
+  track.setAttribute("aria-hidden", "true");
 
-  label.appendChild(checkbox);
-  label.appendChild(slider);
-
-  div.appendChild(siteInfo);
-  siteAction.appendChild(label);
-  div.appendChild(siteAction);
-
-  return div;
+  label.append(checkbox, track);
+  container.append(icon, name, label);
+  return container;
 }
 
 function renderSites(enabledSites) {
-  while (sitesList.firstChild) {
-    sitesList.removeChild(sitesList.firstChild);
+  const fragment = document.createDocumentFragment();
+  for (const site of SITES) {
+    fragment.appendChild(createSiteToggle(site, enabledSites[site.id] !== false));
+  }
+  sitesList.replaceChildren(fragment);
+}
+
+function setAllSites(enabled) {
+  const enabledSites = {};
+  for (const site of SITES) {
+    enabledSites[site.id] = enabled;
   }
 
-  const fragment = document.createDocumentFragment();
-  SITES.forEach((site) => {
-    const toggle = createSiteToggle(site, enabledSites[site.id] !== false);
-    fragment.appendChild(toggle);
-  });
-  sitesList.appendChild(fragment);
+  currentSettings = { ...currentSettings, enabledSites };
+  updateEnabledSitesUi(enabledSites);
+  renderSites(enabledSites);
+  queueSave({ enabledSites }, true);
 }
 
 function onSiteToggleChange(event) {
   const target = event.target;
-  if (!(target instanceof HTMLInputElement) || target.type !== "checkbox" || !target.dataset.siteId) {
+  if (
+    !(target instanceof HTMLInputElement) ||
+    target.type !== "checkbox" ||
+    !target.dataset.siteId
+  ) {
     return;
   }
 
   const siteToggle = target.closest(".site-toggle");
   if (siteToggle) {
-    siteToggle.dataset.enabled = target.checked ? "true" : "false";
-    const state = siteToggle.querySelector(".site-state");
-    if (state) {
-      state.textContent = target.checked ? "On" : "Off";
-    }
+    siteToggle.dataset.enabled = String(target.checked);
   }
 
   currentSettings = {
@@ -325,64 +343,65 @@ function onSiteToggleChange(event) {
   queueSave({ enabledSites: currentSettings.enabledSites }, true);
 }
 
+function onVolumeInput(event) {
+  const sanitizedValue = sanitizeVolumeInputText(event.target.value);
+  event.target.value = sanitizedValue;
+  if (sanitizedValue !== "") {
+    updateVolume(sanitizedValue);
+  }
+}
+
+function commitVolumeInput() {
+  const sanitizedValue = sanitizeVolumeInputText(volumeInput.value);
+  updateVolume(sanitizedValue === "" ? currentSettings.volume : sanitizedValue, true);
+}
+
+function onVolumeWheel(event) {
+  event.preventDefault();
+  if (event.deltaY === 0) {
+    return;
+  }
+  updateVolume(currentSettings.volume + (event.deltaY > 0 ? -1 : 1));
+}
+
 async function init() {
   currentSettings = await loadSettings();
-
   setVolumeUi(currentSettings.volume);
   updateEnabledSitesUi(currentSettings.enabledSites);
   renderSites(currentSettings.enabledSites);
+  versionValue.textContent = `v${chrome.runtime.getManifest().version}`;
+  setSaveStatus("saved");
 
-  volumeSlider.addEventListener("input", (event) => {
-    updateVolume(event.target.value);
-  });
-  volumeSlider.addEventListener("change", (event) => {
-    updateVolume(event.target.value, true);
-  });
+  volumeSlider.addEventListener("input", (event) => updateVolume(event.target.value));
+  volumeSlider.addEventListener("change", (event) => updateVolume(event.target.value, true));
+  volumeSlider.addEventListener("wheel", onVolumeWheel, { passive: false });
 
-  volumeInput.addEventListener("input", (event) => {
-    const sanitizedValue = sanitizeVolumeInputText(event.target.value);
-    event.target.value = sanitizedValue;
-    syncVolumeInputWidth(sanitizedValue);
-
-    if (sanitizedValue === "") {
-      return;
-    }
-    updateVolume(sanitizedValue);
-  });
-
-  volumeInput.addEventListener("blur", (event) => {
-    const fallback = currentSettings.volume;
-    const sanitizedValue = sanitizeVolumeInputText(event.target.value);
-    const nextValue = sanitizedValue === "" ? fallback : sanitizedValue;
-    updateVolume(nextValue, true);
-  });
-
-  volumeInput.addEventListener("change", (event) => {
-    const sanitizedValue = sanitizeVolumeInputText(event.target.value);
-    const nextValue = sanitizedValue === "" ? currentSettings.volume : sanitizedValue;
-    updateVolume(nextValue, true);
-  });
-
-  volumeInput.addEventListener("wheel", (event) => {
-    event.preventDefault();
-    const delta = event.deltaY > 0 ? -1 : 1;
-    updateVolume(currentSettings.volume + delta, true);
-  });
-
-  volumeSlider.addEventListener("wheel", (event) => {
-    event.preventDefault();
-    const delta = event.deltaY > 0 ? -1 : 1;
-    updateVolume(currentSettings.volume + delta, true);
-  });
-
+  volumeInput.addEventListener("input", onVolumeInput);
+  volumeInput.addEventListener("blur", commitVolumeInput);
+  volumeInput.addEventListener("wheel", onVolumeWheel, { passive: false });
   volumeInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
-      updateVolume(volumeInput.value, true);
       volumeInput.blur();
+    } else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+      event.preventDefault();
+      updateVolume(currentSettings.volume + (event.key === "ArrowUp" ? 1 : -1));
+    }
+  });
+
+  presetButtons.addEventListener("click", (event) => {
+    if (!(event.target instanceof Element)) {
+      return;
+    }
+    const button = event.target.closest("[data-volume]");
+    if (button) {
+      updateVolume(button.dataset.volume, true);
     }
   });
 
   sitesList.addEventListener("change", onSiteToggleChange);
+  enableAllButton.addEventListener("click", () => setAllSites(true));
+  disableAllButton.addEventListener("click", () => setAllSites(false));
+  window.addEventListener("pagehide", flushPendingSaveOnClose);
 }
 
-init();
+void init();
