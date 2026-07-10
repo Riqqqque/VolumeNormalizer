@@ -10,6 +10,14 @@ const DEFAULT_ZIP_PATH = path.resolve(
 const UPLOAD_POLL_DELAY_MS = Number(process.env.CHROME_UPLOAD_POLL_DELAY_MS || 5000);
 const UPLOAD_POLL_ATTEMPTS = Number(process.env.CHROME_UPLOAD_POLL_ATTEMPTS || 24);
 
+class RequestError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.name = "RequestError";
+    this.status = status;
+  }
+}
+
 function requireEnv(name) {
   const value = process.env[name];
   if (!value) {
@@ -42,7 +50,10 @@ async function requestJson(url, options) {
         : null) ||
       payload.raw ||
       response.statusText;
-    throw new Error(`${response.status} ${response.statusText}: ${detail}`);
+    throw new RequestError(
+      response.status,
+      `${response.status} ${response.statusText}: ${detail}`
+    );
   }
 
   return payload;
@@ -135,6 +146,58 @@ async function fetchStatus(accessToken) {
   });
 }
 
+function getLegacyItemUrl(suffix = "") {
+  const extensionId = requireEnv("CHROME_EXTENSION_ID");
+  return `https://www.googleapis.com/chromewebstore/v1.1/items/${extensionId}${suffix}`;
+}
+
+async function uploadLegacyPackage(accessToken, zipPath) {
+  const zipBuffer = fs.readFileSync(zipPath);
+  const payload = await requestJson(`${getLegacyItemUrl()}?uploadType=media`, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/zip"
+    },
+    body: zipBuffer
+  });
+
+  if (isFailedUploadState(getUploadState(payload))) {
+    throw new Error(`Chrome V1 upload failed: ${JSON.stringify(payload)}`);
+  }
+
+  console.log(`Chrome V1 upload state: ${getUploadState(payload) || "accepted"}`);
+  return payload;
+}
+
+async function fetchLegacyStatus(accessToken) {
+  return requestJson(`${getLegacyItemUrl()}?projection=DRAFT`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${accessToken}`
+    }
+  });
+}
+
+async function publishLegacyPackage(accessToken) {
+  const payload = await requestJson(
+    `${getLegacyItemUrl("/publish")}?publishTarget=default`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`
+      }
+    }
+  );
+  const statuses = Array.isArray(payload.status) ? payload.status : [];
+
+  if (!statuses.includes("OK")) {
+    throw new Error(`Chrome V1 publish failed: ${JSON.stringify(payload)}`);
+  }
+
+  console.log(`Chrome V1 publish response: ${JSON.stringify(payload)}`);
+}
+
 function summarizeRevisionStatus(revisionStatus) {
   if (!revisionStatus) {
     return null;
@@ -158,7 +221,7 @@ function summarizeStatus(payload) {
   };
 }
 
-async function waitForUpload(accessToken, uploadPayload) {
+async function waitForUpload(accessToken, uploadPayload, statusFetcher = fetchStatus) {
   let statusPayload = uploadPayload;
 
   for (let attempt = 0; attempt <= UPLOAD_POLL_ATTEMPTS; attempt += 1) {
@@ -178,7 +241,7 @@ async function waitForUpload(accessToken, uploadPayload) {
 
     console.log("Chrome upload is still processing; checking again...");
     await sleep(UPLOAD_POLL_DELAY_MS);
-    statusPayload = await fetchStatus(accessToken);
+    statusPayload = await statusFetcher(accessToken);
   }
 
   return statusPayload;
@@ -197,6 +260,19 @@ async function publishPackage(accessToken) {
   console.log(`Chrome publish response: ${JSON.stringify(payload)}`);
 }
 
+async function publishWithLegacyApi(accessToken, zipPath) {
+  console.log("Chrome V2 preflight was rejected; retrying with the supported V1 API");
+  const uploadPayload = await uploadLegacyPackage(accessToken, zipPath);
+  await waitForUpload(accessToken, uploadPayload, fetchLegacyStatus);
+
+  if (process.env.CHROME_SKIP_PUBLISH === "true") {
+    console.log("Chrome publish skipped because CHROME_SKIP_PUBLISH=true");
+    return;
+  }
+
+  await publishLegacyPackage(accessToken);
+}
+
 async function main() {
   const zipPath = path.resolve(process.argv[2] || DEFAULT_ZIP_PATH);
 
@@ -205,7 +281,16 @@ async function main() {
   }
 
   const accessToken = await getAccessToken();
-  const statusBeforeUpload = await fetchStatus(accessToken);
+  let statusBeforeUpload;
+  try {
+    statusBeforeUpload = await fetchStatus(accessToken);
+  } catch (error) {
+    if (error instanceof RequestError && error.status === 400) {
+      await publishWithLegacyApi(accessToken, zipPath);
+      return;
+    }
+    throw error;
+  }
   console.log(
     `Chrome status before upload: ${JSON.stringify(summarizeStatus(statusBeforeUpload))}`
   );
