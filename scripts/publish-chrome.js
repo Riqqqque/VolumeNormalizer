@@ -41,10 +41,12 @@ async function requestJson(url, options) {
 
   if (!response.ok) {
     const errorPayload = payload.error;
+    const errorCode = typeof errorPayload === "string" ? errorPayload : null;
+    const errorDescription = payload.error_description || errorPayload?.message || null;
     const detail =
-      payload.error_description ||
-      errorPayload?.message ||
-      (typeof errorPayload === "string" ? errorPayload : null) ||
+      (errorCode && errorDescription
+        ? `${errorCode}: ${errorDescription}`
+        : errorCode || errorDescription) ||
       (errorPayload && typeof errorPayload === "object"
         ? JSON.stringify(errorPayload)
         : null) ||
