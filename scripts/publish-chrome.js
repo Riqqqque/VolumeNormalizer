@@ -32,10 +32,14 @@ async function requestJson(url, options) {
   }
 
   if (!response.ok) {
+    const errorPayload = payload.error;
     const detail =
       payload.error_description ||
-      payload.error?.message ||
-      payload.error ||
+      errorPayload?.message ||
+      (typeof errorPayload === "string" ? errorPayload : null) ||
+      (errorPayload && typeof errorPayload === "object"
+        ? JSON.stringify(errorPayload)
+        : null) ||
       payload.raw ||
       response.statusText;
     throw new Error(`${response.status} ${response.statusText}: ${detail}`);
@@ -107,7 +111,7 @@ async function uploadPackage(accessToken, zipPath) {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/zip"
+      "Content-Type": "application/octet-stream"
     },
     body: zipBuffer
   });
@@ -129,6 +133,29 @@ async function fetchStatus(accessToken) {
       Authorization: `Bearer ${accessToken}`
     }
   });
+}
+
+function summarizeRevisionStatus(revisionStatus) {
+  if (!revisionStatus) {
+    return null;
+  }
+
+  return {
+    state: revisionStatus.state || null,
+    versions: (revisionStatus.distributionChannels || [])
+      .map((channel) => channel.crxVersion)
+      .filter(Boolean)
+  };
+}
+
+function summarizeStatus(payload) {
+  return {
+    published: summarizeRevisionStatus(payload.publishedItemRevisionStatus),
+    submitted: summarizeRevisionStatus(payload.submittedItemRevisionStatus),
+    lastUpload: payload.lastAsyncUploadState || null,
+    takenDown: payload.takenDown === true,
+    warned: payload.warned === true
+  };
 }
 
 async function waitForUpload(accessToken, uploadPayload) {
@@ -178,6 +205,10 @@ async function main() {
   }
 
   const accessToken = await getAccessToken();
+  const statusBeforeUpload = await fetchStatus(accessToken);
+  console.log(
+    `Chrome status before upload: ${JSON.stringify(summarizeStatus(statusBeforeUpload))}`
+  );
   const uploadPayload = await uploadPackage(accessToken, zipPath);
   await waitForUpload(accessToken, uploadPayload);
 
