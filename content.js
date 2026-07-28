@@ -36,6 +36,8 @@ let scanJobCursor = 0;
 let queuedScanRoots = new WeakSet();
 let scanTimerId = null;
 let mediaObserver = null;
+let fallbackTimerId = null;
+let lastDiscoveryScanAt = 0;
 
 function debugLog(...args) {
   if (DEBUG) {
@@ -426,16 +428,21 @@ function pruneObservedRoots() {
   }
 }
 
+function pruneTrackedMedia() {
+  for (const element of trackedMedia) {
+    if (!element.isConnected) {
+      trackedMedia.delete(element);
+    }
+  }
+}
+
 function normalizeTrackedMedia() {
   const enabled = isSiteEnabled();
   const targetVolume = getTargetVolume();
   const volumeAttribute = String(currentSettings.volume);
 
+  pruneTrackedMedia();
   for (const element of trackedMedia) {
-    if (!element.isConnected) {
-      trackedMedia.delete(element);
-      continue;
-    }
     if (enabled) {
       normalizeMediaElement(element, targetVolume, volumeAttribute);
     }
@@ -443,17 +450,23 @@ function normalizeTrackedMedia() {
 }
 
 function clearProcessedMarkers() {
+  pruneTrackedMedia();
   for (const element of trackedMedia) {
-    if (!element.isConnected) {
-      trackedMedia.delete(element);
-      continue;
-    }
     element.removeAttribute(PROCESSED_ATTR);
   }
 }
 
 function setupObserver() {
   mediaObserver = new MutationObserver((mutations) => {
+    const removedNodes = mutations.some(
+      (mutation) => mutation.removedNodes.length > 0
+    );
+
+    if (removedNodes) {
+      pruneTrackedMedia();
+      pruneObservedRoots();
+    }
+
     if (!isSiteEnabled()) {
       return;
     }
@@ -519,26 +532,66 @@ function setupSettingsListener() {
   });
 }
 
-function setupFallbackChecks() {
-  window.setInterval(() => {
-    if (document.visibilityState === "visible") {
-      normalizeTrackedMedia();
-    }
-  }, MEDIA_RECHECK_MS);
+function stopFallbackChecks() {
+  if (fallbackTimerId !== null) {
+    window.clearTimeout(fallbackTimerId);
+    fallbackTimerId = null;
+  }
+}
 
-  window.setInterval(() => {
-    if (document.visibilityState === "visible" && isSiteEnabled()) {
-      pruneObservedRoots();
-      queueRootScan(document);
-    }
-  }, DISCOVERY_RESCAN_MS);
+function scheduleFallbackCheck() {
+  if (fallbackTimerId !== null || document.visibilityState !== "visible") {
+    return;
+  }
+
+  fallbackTimerId = window.setTimeout(runFallbackCheck, MEDIA_RECHECK_MS);
+}
+
+function runFallbackCheck() {
+  fallbackTimerId = null;
+  if (document.visibilityState !== "visible") {
+    return;
+  }
+
+  normalizeTrackedMedia();
+
+  const now = Date.now();
+  if (isSiteEnabled() && now - lastDiscoveryScanAt >= DISCOVERY_RESCAN_MS) {
+    lastDiscoveryScanAt = now;
+    pruneObservedRoots();
+    queueRootScan(document);
+  }
+
+  scheduleFallbackCheck();
+}
+
+function resumeFallbackChecks() {
+  if (document.visibilityState !== "visible") {
+    return;
+  }
+
+  normalizeTrackedMedia();
+  if (isSiteEnabled()) {
+    lastDiscoveryScanAt = Date.now();
+    pruneObservedRoots();
+    queueRootScan(document);
+  }
+  scheduleFallbackCheck();
+}
+
+function setupFallbackChecks() {
+  lastDiscoveryScanAt = Date.now();
+  scheduleFallbackCheck();
 
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && isSiteEnabled()) {
-      normalizeTrackedMedia();
-      queueRootScan(document);
+    if (document.visibilityState === "visible") {
+      resumeFallbackChecks();
+    } else {
+      stopFallbackChecks();
     }
   });
+  window.addEventListener("pagehide", stopFallbackChecks);
+  window.addEventListener("pageshow", resumeFallbackChecks);
 }
 
 function setupCapturedPlaybackCheck() {

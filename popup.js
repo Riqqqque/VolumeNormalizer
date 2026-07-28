@@ -23,6 +23,7 @@ const volumeInput = document.getElementById("volumeInput");
 const volumeTone = document.getElementById("volumeTone");
 const presetButtons = document.getElementById("presetButtons");
 const sitesList = document.getElementById("sitesList");
+const sitesTotalValue = document.getElementById("sitesTotalValue");
 const enableAllButton = document.getElementById("enableAllButton");
 const disableAllButton = document.getElementById("disableAllButton");
 const saveStatus = document.getElementById("saveStatus");
@@ -149,7 +150,8 @@ function flushQueuedSave() {
 
   const savePromise = saveSequence
     .catch(() => {})
-    .then(() => saveSettingsNow(settingsPatch));
+    .then(() => saveSettingsNow(settingsPatch))
+    .catch(() => false);
   saveSequence = savePromise;
 
   savePromise.then((saved) => {
@@ -261,11 +263,19 @@ function updateVolume(value, immediateSave = false) {
 }
 
 function updateEnabledSitesUi(enabledSites) {
-  enabledSitesValue.textContent = `${getEnabledSiteCount(enabledSites)}/${SITES.length}`;
+  const enabledCount = getEnabledSiteCount(enabledSites);
+  enabledSitesValue.textContent = `${enabledCount}/${SITES.length}`;
+  enabledSitesValue.setAttribute(
+    "aria-label",
+    `${enabledCount} of ${SITES.length} supported sites active`
+  );
+  sitesTotalValue.textContent = `${SITES.length} sites`;
+  enableAllButton.disabled = enabledCount === SITES.length;
+  disableAllButton.disabled = enabledCount === 0;
 }
 
 function createSiteToggle(site, enabled) {
-  const container = document.createElement("div");
+  const container = document.createElement("label");
   container.className = "site-toggle";
   container.dataset.enabled = String(enabled);
 
@@ -279,11 +289,12 @@ function createSiteToggle(site, enabled) {
   name.textContent = site.name;
   name.title = site.name;
 
-  const label = document.createElement("label");
-  label.className = "switch";
+  const switchControl = document.createElement("span");
+  switchControl.className = "switch";
 
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
+  checkbox.className = "switch-input";
   checkbox.dataset.siteId = site.id;
   checkbox.checked = enabled;
   checkbox.setAttribute("aria-label", `${site.name} enabled`);
@@ -292,8 +303,8 @@ function createSiteToggle(site, enabled) {
   track.className = "switch-track";
   track.setAttribute("aria-hidden", "true");
 
-  label.append(checkbox, track);
-  container.append(icon, name, label);
+  switchControl.append(checkbox, track);
+  container.append(icon, name, switchControl);
   return container;
 }
 
@@ -305,6 +316,18 @@ function renderSites(enabledSites) {
   sitesList.replaceChildren(fragment);
 }
 
+function syncSiteToggles(enabledSites) {
+  const toggles = sitesList.querySelectorAll(".switch-input[data-site-id]");
+  toggles.forEach((toggle) => {
+    const enabled = enabledSites[toggle.dataset.siteId] !== false;
+    toggle.checked = enabled;
+    const container = toggle.closest(".site-toggle");
+    if (container) {
+      container.dataset.enabled = String(enabled);
+    }
+  });
+}
+
 function setAllSites(enabled) {
   const enabledSites = {};
   for (const site of SITES) {
@@ -313,7 +336,7 @@ function setAllSites(enabled) {
 
   currentSettings = { ...currentSettings, enabledSites };
   updateEnabledSitesUi(enabledSites);
-  renderSites(enabledSites);
+  syncSiteToggles(enabledSites);
   queueSave({ enabledSites }, true);
 }
 

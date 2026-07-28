@@ -1,15 +1,18 @@
 {
   "name": "volume-normalizer",
-  "version": "2.0.11",
+  "version": "2.0.12",
   "private": true,
   "license": "MIT",
   "scripts": {
     "build": "node scripts/build.js",
-    "lint:scripts": "node --check sites.js && node --check background.js && node --check content.js && node --check popup.js && node --check scripts/build.js && node --check scripts/bump-version.js && node --check scripts/check-build.js && node --check scripts/check-sites.js && node --check scripts/publish-chrome.js && node --check scripts/setup-chrome-oauth-server.js && node --check scripts/setup-firefox-secrets-server.js",
+    "lint:scripts": "node --check sites.js && node --check background.js && node --check content.js && node --check popup.js && node --check scripts/build.js && node --check scripts/bump-version.js && node --check scripts/check-build.js && node --check scripts/check-sites.js && node --check scripts/check-ui.js && node --check scripts/preview-popup.js && node --check scripts/publish-chrome.js && node --check scripts/setup-chrome-oauth-server.js && node --check scripts/setup-firefox-secrets-server.js && node --check scripts/test-runtime.js",
     "lint:build": "node scripts/check-build.js",
     "lint:firefox": "web-ext lint --source-dir dist/firefox",
     "lint:sites": "node scripts/check-sites.js",
-    "check": "npm run build && npm run lint:scripts && npm run lint:sites && npm run lint:build && npm run lint:firefox",
+    "lint:ui": "node scripts/check-ui.js",
+    "preview": "node scripts/preview-popup.js",
+    "test:runtime": "node scripts/test-runtime.js",
+    "check": "npm run build && npm run lint:scripts && npm run lint:sites && npm run lint:ui && npm run test:runtime && npm run lint:build && npm run lint:firefox",
     "version:set": "node scripts/bump-version.js",
     "publish:chrome": "node scripts/publish-chrome.js",
     "publish:firefox": "web-ext sign --source-dir dist/firefox --artifacts-dir dist/firefox-signed --channel listed --amo-metadata amo-metadata.json --approval-timeout 0",
@@ -17,7 +20,7 @@
     "setup:firefox": "node scripts/setup-firefox-secrets-server.js"
   },
   "devDependencies": {
-    "web-ext": "^10.4.0",
+    "web-ext": "^10.5.0",
     "yazl": "^3.3.1"
   }
 }

@@ -12,6 +12,8 @@ Browser extension that normalizes video/audio element volume on selected high-no
 - Persistent settings using browser sync storage
 - Embedded-player support for related frames and open shadow roots
 - Time-sliced media discovery for busy feeds
+- Hidden-tab timer suspension to avoid unnecessary background wakeups
+- Compact popup with reduced-motion support and native toolbar icon sizes
 
 ## Supported Sites
 
@@ -44,6 +46,8 @@ Browser extension that normalizes video/audio element volume on selected high-no
 - `popup.js`: Popup behavior and settings persistence
 - `manifest.json`: Cross-browser MV3 source manifest
 - `scripts/build.js`: Produces Chrome and Firefox build outputs and store ZIP files in `dist/`
+- `scripts/test-runtime.js`: Exercises media discovery, shadow roots, settings, and timer behavior
+- `scripts/preview-popup.js`: Serves the popup with a local browser API mock for UI review
 - `package.json`: Build and validation scripts
 
 ## Build
@@ -72,12 +76,15 @@ Browser extension that normalizes video/audio element volume on selected high-no
 ## Validation
 
 - `npm run check`: Builds both targets, validates site/build consistency, checks script syntax, and runs Firefox linting.
+- `npm run preview`: Starts the popup preview server at `http://127.0.0.1:4173`.
+- `npm run test:runtime`: Runs the isolated content-script behavior and stress smoke test.
 
 ## Development Notes
 
 - Settings are stored in `chrome.storage.sync`.
 - Content script uses exact domain/subdomain matching (no loose substring matching).
 - Large DOM updates are scanned in short idle-time slices instead of blocking the page.
+- Hidden tabs stop periodic fallback checks and resume them when visible.
 - Popup writes are proxied through the background script so final saves survive popup teardown.
 - Build output strips BOMs and generates browser-specific manifests from the root source manifest.
 
