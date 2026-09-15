@@ -40,6 +40,7 @@ function readPngDimensions(relativePath) {
 function main() {
   const errors = [];
   const popupHtml = readText("popup.html");
+  const popupScript = readText("popup.js");
   const contentScript = readText("content.js");
   const manifest = readJson("manifest.json");
 
@@ -60,6 +61,15 @@ function main() {
   }
   if (!popupHtml.includes("contain: layout paint")) {
     errors.push("popup.html is missing containment for the site grid");
+  }
+  if (!popupHtml.includes("width: var(--volume-input-width, 2ch)")) {
+    errors.push("popup.html must size the volume input to its visible digits");
+  }
+  if (!popupHtml.includes("grid-template-columns: max-content max-content")) {
+    errors.push("popup.html must center the number and percent sign as one group");
+  }
+  if (!popupScript.includes("`${displayValue.length}ch`")) {
+    errors.push("popup.js must update the volume input width for 0 through 100");
   }
   if (contentScript.includes("setInterval(")) {
     errors.push("content.js must not poll hidden tabs with setInterval");

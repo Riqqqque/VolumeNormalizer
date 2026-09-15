@@ -244,6 +244,10 @@ function setVolumeUi(value) {
   volumeSlider.value = displayValue;
   volumeSlider.style.setProperty("--volume-percent", `${value}%`);
   volumeInput.value = displayValue;
+  volumeInput.style.setProperty(
+    "--volume-input-width",
+    `${displayValue.length}ch`
+  );
   volumeTone.textContent = getVolumeToneLabel(value);
   updatePresetUi(value);
 }

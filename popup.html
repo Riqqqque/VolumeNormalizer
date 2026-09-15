@@ -231,7 +231,9 @@
     }
 
     .volume-readout {
-      display: inline-flex;
+      display: inline-grid;
+      grid-auto-flow: column;
+      grid-template-columns: max-content max-content;
       width: 112px;
       height: 72px;
       align-items: baseline;
@@ -246,8 +248,11 @@
     }
 
     .volume-input {
-      width: 3ch;
+      box-sizing: content-box;
+      width: var(--volume-input-width, 2ch);
       min-width: 0;
+      margin: 0;
+      padding: 0 2px;
       border: 0;
       outline: 0;
       background: transparent;
@@ -257,7 +262,7 @@
       font-variant-numeric: tabular-nums;
       letter-spacing: -0.055em;
       line-height: 1;
-      text-align: right;
+      text-align: center;
     }
 
     .volume-input::selection {
@@ -265,7 +270,7 @@
     }
 
     .percent-sign {
-      margin-left: 1px;
+      margin-left: 0;
       color: var(--text-soft);
       font-size: 16px;
       font-weight: 650;
